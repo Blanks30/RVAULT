@@ -1,0 +1,5 @@
+node_modules/
+ravault.db
+.env
+.env.*
+!.env.example  
