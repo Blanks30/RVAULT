@@ -3,6 +3,45 @@ const db = require("../database");
 
 const router = express.Router();
 
+function detectPlatform(url) {
+    try {
+        const hostname = new URL(url).hostname.toLowerCase();
+
+        if (
+            hostname === "instagram.com" ||
+            hostname.endsWith(".instagram.com")
+        ) {
+            return "Instagram";
+        }
+
+        if (
+            hostname === "youtube.com" ||
+            hostname.endsWith(".youtube.com") ||
+            hostname === "youtu.be"
+        ) {
+            return "YouTube";
+        }
+
+        if (
+            hostname === "tiktok.com" ||
+            hostname.endsWith(".tiktok.com")
+        ) {
+            return "TikTok";
+        }
+
+        if (
+            hostname === "reddit.com" ||
+            hostname.endsWith(".reddit.com")
+        ) {
+            return "Reddit";
+        }
+
+        return "Unknown";
+    } catch (error) {
+        return "Unknown";
+    }
+}
+
 router.post("/save", (req, res) => {
     const { url } = req.body;
 
@@ -12,17 +51,20 @@ router.post("/save", (req, res) => {
         });
     }
 
+    const platform = detectPlatform(url);
+
     try {
         const stmt = db.prepare(
-            "INSERT INTO saved_content (url) VALUES (?)"
+            "INSERT INTO saved_content (url, platform) VALUES (?, ?)"
         );
 
-        const result = stmt.run(url);
+        const result = stmt.run(url, platform);
 
         res.json({
             message: "Content saved!",
             id: result.lastInsertRowid,
-            url: url
+            url: url,
+            platform: platform
         });
     } catch (error) {
         if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {

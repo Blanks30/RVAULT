@@ -71,6 +71,10 @@ function App() {
         item.url.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
+    const instagramCount = savedContent.filter(
+        (item) => item.platform === "Instagram"
+    ).length;
+
     return (
         <div className="app">
             <header className="header">
@@ -93,13 +97,7 @@ function App() {
 
                     <div className="stat-card">
                         <span>Instagram</span>
-                        <strong>
-                            {
-                                savedContent.filter((item) =>
-                                    item.url.includes("instagram.com")
-                                ).length
-                            }
-                        </strong>
+                        <strong>{instagramCount}</strong>
                     </div>
                 </section>
 
@@ -107,6 +105,7 @@ function App() {
                     <div className="section-header">
                         <div>
                             <h2>Saved Content</h2>
+
                             <span>
                                 {filteredContent.length} of{" "}
                                 {savedContent.length} items
@@ -164,7 +163,8 @@ function App() {
                                     >
                                         <div className="card-top">
                                             <span className="platform">
-                                                Instagram
+                                                {item.platform ||
+                                                    "Unknown"}
                                             </span>
 
                                             <span className="date">
@@ -175,7 +175,8 @@ function App() {
                                         </div>
 
                                         <h3>
-                                            Saved Instagram Content
+                                            Saved {item.platform ||
+                                                "Social"} Content
                                         </h3>
 
                                         <a

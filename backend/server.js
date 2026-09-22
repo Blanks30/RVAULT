@@ -54,15 +54,57 @@ function extractUrls(text) {
     return text.match(urlRegex) || [];
 }
 
+function detectPlatform(url) {
+    try {
+        const hostname = new URL(url).hostname.toLowerCase();
+
+        if (
+            hostname === "instagram.com" ||
+            hostname.endsWith(".instagram.com")
+        ) {
+            return "Instagram";
+        }
+
+        if (
+            hostname === "youtube.com" ||
+            hostname.endsWith(".youtube.com") ||
+            hostname === "youtu.be"
+        ) {
+            return "YouTube";
+        }
+
+        if (
+            hostname === "tiktok.com" ||
+            hostname.endsWith(".tiktok.com")
+        ) {
+            return "TikTok";
+        }
+
+        if (
+            hostname === "reddit.com" ||
+            hostname.endsWith(".reddit.com")
+        ) {
+            return "Reddit";
+        }
+
+        return "Unknown";
+    } catch (error) {
+        return "Unknown";
+    }
+}
+
 function saveUrl(url) {
+    const platform = detectPlatform(url);
+
     try {
         const stmt = db.prepare(
-            "INSERT INTO saved_content (url) VALUES (?)"
+            "INSERT INTO saved_content (url, platform) VALUES (?, ?)"
         );
 
-        stmt.run(url);
+        stmt.run(url, platform);
 
         console.log("Saved URL:", url);
+        console.log("Platform:", platform);
     } catch (error) {
         if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
             console.log("URL already saved:", url);
