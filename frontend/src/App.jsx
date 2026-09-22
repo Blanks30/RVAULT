@@ -5,6 +5,7 @@ function App() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     const [deletingId, setDeletingId] = useState(null);
+    const [searchTerm, setSearchTerm] = useState("");
 
     const fetchSavedContent = async () => {
         try {
@@ -66,6 +67,10 @@ function App() {
         fetchSavedContent();
     }, []);
 
+    const filteredContent = savedContent.filter((item) =>
+        item.url.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
     return (
         <div className="app">
             <header className="header">
@@ -100,8 +105,23 @@ function App() {
 
                 <section className="content-section">
                     <div className="section-header">
-                        <h2>Saved Content</h2>
-                        <span>{savedContent.length} items</span>
+                        <div>
+                            <h2>Saved Content</h2>
+                            <span>
+                                {filteredContent.length} of{" "}
+                                {savedContent.length} items
+                            </span>
+                        </div>
+
+                        <input
+                            type="text"
+                            className="search-input"
+                            placeholder="Search saved URLs..."
+                            value={searchTerm}
+                            onChange={(event) =>
+                                setSearchTerm(event.target.value)
+                            }
+                        />
                     </div>
 
                     {loading && (
@@ -116,64 +136,83 @@ function App() {
                         </div>
                     )}
 
-                    {!loading && !error && savedContent.length === 0 && (
-                        <div className="message">
-                            No saved content yet.
-                        </div>
-                    )}
+                    {!loading &&
+                        !error &&
+                        savedContent.length === 0 && (
+                            <div className="message">
+                                No saved content yet.
+                            </div>
+                        )}
 
-                    {!loading && !error && savedContent.length > 0 && (
-                        <div className="content-grid">
-                            {savedContent.map((item) => (
-                                <article
-                                    className="content-card"
-                                    key={item.id}
-                                >
-                                    <div className="card-top">
-                                        <span className="platform">
-                                            Instagram
-                                        </span>
+                    {!loading &&
+                        !error &&
+                        savedContent.length > 0 &&
+                        filteredContent.length === 0 && (
+                            <div className="message">
+                                No content matches your search.
+                            </div>
+                        )}
 
-                                        <span className="date">
-                                            {new Date(
-                                                item.created_at
-                                            ).toLocaleString()}
-                                        </span>
-                                    </div>
-
-                                    <h3>Saved Instagram Content</h3>
-
-                                    <a
-                                        href={item.url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
+                    {!loading &&
+                        !error &&
+                        filteredContent.length > 0 && (
+                            <div className="content-grid">
+                                {filteredContent.map((item) => (
+                                    <article
+                                        className="content-card"
+                                        key={item.id}
                                     >
-                                        {item.url}
-                                    </a>
+                                        <div className="card-top">
+                                            <span className="platform">
+                                                Instagram
+                                            </span>
 
-                                    <div className="card-footer">
-                                        <span>
-                                            ID #{item.id}
-                                        </span>
+                                            <span className="date">
+                                                {new Date(
+                                                    item.created_at
+                                                ).toLocaleString()}
+                                            </span>
+                                        </div>
 
-                                        <button
-                                            className="delete-button"
-                                            onClick={() =>
-                                                deleteContent(item.id)
-                                            }
-                                            disabled={
-                                                deletingId === item.id
-                                            }
+                                        <h3>
+                                            Saved Instagram Content
+                                        </h3>
+
+                                        <a
+                                            href={item.url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
                                         >
-                                            {deletingId === item.id
-                                                ? "Deleting..."
-                                                : "Delete"}
-                                        </button>
-                                    </div>
-                                </article>
-                            ))}
-                        </div>
-                    )}
+                                            {item.url}
+                                        </a>
+
+                                        <div className="card-footer">
+                                            <span>
+                                                ID #{item.id}
+                                            </span>
+
+                                            <button
+                                                className="delete-button"
+                                                onClick={() =>
+                                                    deleteContent(
+                                                        item.id
+                                                    )
+                                                }
+                                                disabled={
+                                                    deletingId ===
+                                                    item.id
+                                                }
+                                            >
+                                                {deletingId ===
+                                                item.id
+                                                    ? "Deleting..."
+                                                    : "Delete"}
+                                            </button>
+                                        </div>
+                                    </article>
+                                ))}
+                            </div>
+                        )}
                 </section>
             </main>
         </div>
