@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const express = require("express");
+const db = require("./database");
 const contentRoutes = require("./routes/content");
 
 const app = express();
@@ -23,6 +24,102 @@ app.get("/instagram/status", (req, res) => {
         connected: true,
         message: "Instagram access token is loaded!"
     });
+});
+
+app.get("/webhook", (req, res) => {
+    const mode = req.query["hub.mode"];
+    const token = req.query["hub.verify_token"];
+    const challenge = req.query["hub.challenge"];
+
+    if (
+        mode === "subscribe" &&
+        token === process.env.META_WEBHOOK_VERIFY_TOKEN
+    ) {
+        console.log("Webhook verified!");
+        return res.status(200).send(challenge);
+    }
+
+    res.sendStatus(403);
+});
+
+function extractUrls(text) {
+    if (!text || typeof text !== "string") {
+        return [];
+    }
+
+    const urlRegex = /https?:\/\/[^\s<>"']+/gi;
+
+    return text.match(urlRegex) || [];
+}
+
+function saveUrl(url) {
+    try {
+        const stmt = db.prepare(
+            "INSERT INTO saved_content (url) VALUES (?)"
+        );
+
+        stmt.run(url);
+
+        console.log("Saved URL:", url);
+    } catch (error) {
+        if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+            console.log("URL already saved:", url);
+        } else {
+            console.error("Could not save URL:", error);
+        }
+    }
+}
+
+function processMessage(message) {
+    if (!message) {
+        return;
+    }
+
+    const text = message.text || "";
+
+    console.log("Message text:", text);
+
+    const urls = extractUrls(text);
+
+    console.log("URLs found:", urls);
+
+    for (const url of urls) {
+        saveUrl(url);
+    }
+}
+
+app.post("/webhook", (req, res) => {
+    console.log("Instagram webhook event received!");
+    console.log(JSON.stringify(req.body, null, 2));
+
+    try {
+        const entries = req.body.entry || [];
+
+        for (const entry of entries) {
+            if (Array.isArray(entry.messaging)) {
+                for (const event of entry.messaging) {
+                    processMessage(event.message);
+                }
+            }
+
+            const changes = entry.changes || [];
+
+            for (const change of changes) {
+                if (change.field !== "messages") {
+                    continue;
+                }
+
+                const message = change.value?.message;
+
+                processMessage(message);
+            }
+        }
+
+        return res.sendStatus(200);
+    } catch (error) {
+        console.error("Webhook processing error:", error);
+        return res.sendStatus(500);
+    }
 });
 
 app.use("/", contentRoutes);
