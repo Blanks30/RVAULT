@@ -94,9 +94,20 @@ function App() {
             selectedPlatform === "All" ||
             platform === selectedPlatform;
 
-        const matchesSearch = item.url
-            .toLowerCase()
-            .includes(searchTerm.toLowerCase());
+        const searchableText = [
+            item.url,
+            item.title,
+            item.media_id,
+            item.cta_type,
+            item.cta_keyword
+        ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+
+        const matchesSearch = searchableText.includes(
+            searchTerm.toLowerCase()
+        );
 
         return matchesPlatform && matchesSearch;
     });
@@ -145,7 +156,7 @@ function App() {
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="Search saved URLs..."
+                            placeholder="Search saved content..."
                             value={searchTerm}
                             onChange={(event) =>
                                 setSearchTerm(event.target.value)
@@ -226,11 +237,49 @@ function App() {
                                         </div>
 
                                         <h3>
-                                            Saved{" "}
-                                            {item.platform ||
-                                                "Social"}{" "}
-                                            Content
+                                            {item.title ||
+                                                `Saved ${
+                                                    item.platform ||
+                                                    "Social"
+                                                } Content`}
                                         </h3>
+
+                                        {item.media_type ===
+                                            "ig_reel" && (
+                                            <span className="content-type">
+                                                Instagram Reel
+                                            </span>
+                                        )}
+
+                                        {item.cta_type &&
+                                            item.cta_type !==
+                                                "NO_ACTION" && (
+                                            <div className="cta-box">
+                                                <div>
+                                                    <strong>
+                                                        CTA
+                                                    </strong>
+                                                    <span>
+                                                        {
+                                                            item.cta_type
+                                                        }
+                                                    </span>
+                                                </div>
+
+                                                {item.cta_keyword && (
+                                                    <div>
+                                                        <strong>
+                                                            Keyword
+                                                        </strong>
+                                                        <span>
+                                                            {
+                                                                item.cta_keyword
+                                                            }
+                                                        </span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
 
                                         <a
                                             href={item.url}

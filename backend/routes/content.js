@@ -82,11 +82,32 @@ router.post("/save", (req, res) => {
 });
 
 router.get("/saved", (req, res) => {
-    const rows = db.prepare(
-        "SELECT * FROM saved_content ORDER BY id DESC"
-    ).all();
+    try {
+        const rows = db
+            .prepare(`
+                SELECT
+                    saved_content.id,
+                    saved_content.url,
+                    saved_content.platform,
+                    saved_content.created_at,
+                    instagram_shared_posts.title,
+                    instagram_shared_posts.media_id,
+                    instagram_shared_posts.media_type
+                FROM saved_content
+                LEFT JOIN instagram_shared_posts
+                    ON saved_content.url = instagram_shared_posts.url
+                ORDER BY saved_content.id DESC
+            `)
+            .all();
 
-    res.json(rows);
+        res.json(rows);
+    } catch (error) {
+        console.error("Could not fetch saved content:", error);
+
+        res.status(500).json({
+            error: "Could not fetch saved content"
+        });
+    }
 });
 
 router.delete("/saved/:id", (req, res) => {
