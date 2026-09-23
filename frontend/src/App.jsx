@@ -6,6 +6,7 @@ function App() {
     const [error, setError] = useState("");
     const [deletingId, setDeletingId] = useState(null);
     const [searchTerm, setSearchTerm] = useState("");
+    const [selectedPlatform, setSelectedPlatform] = useState("All");
 
     const fetchSavedContent = async () => {
         try {
@@ -67,9 +68,38 @@ function App() {
         fetchSavedContent();
     }, []);
 
-    const filteredContent = savedContent.filter((item) =>
-        item.url.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const platforms = [
+        "All",
+        "Instagram",
+        "YouTube",
+        "TikTok",
+        "Reddit",
+        "Unknown"
+    ];
+
+    const getPlatformCount = (platform) => {
+        if (platform === "All") {
+            return savedContent.length;
+        }
+
+        return savedContent.filter(
+            (item) => (item.platform || "Unknown") === platform
+        ).length;
+    };
+
+    const filteredContent = savedContent.filter((item) => {
+        const platform = item.platform || "Unknown";
+
+        const matchesPlatform =
+            selectedPlatform === "All" ||
+            platform === selectedPlatform;
+
+        const matchesSearch = item.url
+            .toLowerCase()
+            .includes(searchTerm.toLowerCase());
+
+        return matchesPlatform && matchesSearch;
+    });
 
     const instagramCount = savedContent.filter(
         (item) => item.platform === "Instagram"
@@ -123,6 +153,27 @@ function App() {
                         />
                     </div>
 
+                    <div className="platform-filters">
+                        {platforms.map((platform) => (
+                            <button
+                                key={platform}
+                                className={`filter-button ${
+                                    selectedPlatform === platform
+                                        ? "active"
+                                        : ""
+                                }`}
+                                onClick={() =>
+                                    setSelectedPlatform(platform)
+                                }
+                            >
+                                {platform}
+                                <span>
+                                    {getPlatformCount(platform)}
+                                </span>
+                            </button>
+                        ))}
+                    </div>
+
                     {loading && (
                         <div className="message">
                             Loading saved content...
@@ -148,7 +199,7 @@ function App() {
                         savedContent.length > 0 &&
                         filteredContent.length === 0 && (
                             <div className="message">
-                                No content matches your search.
+                                No content matches your filters.
                             </div>
                         )}
 
@@ -175,8 +226,10 @@ function App() {
                                         </div>
 
                                         <h3>
-                                            Saved {item.platform ||
-                                                "Social"} Content
+                                            Saved{" "}
+                                            {item.platform ||
+                                                "Social"}{" "}
+                                            Content
                                         </h3>
 
                                         <a
