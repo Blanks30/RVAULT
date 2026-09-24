@@ -183,7 +183,10 @@ function saveInstagramSharedMedia({
         console.log("Instagram shared media saved!");
         console.log("Media type:", mediaType);
         console.log("Media ID:", mediaId);
-        console.log("CTA type:", ctaType || "NO_ACTION");
+        console.log(
+            "CTA type:",
+            ctaType || "NO_ACTION"
+        );
         console.log(
             "CTA keyword:",
             ctaKeyword || "(none)"
@@ -238,18 +241,25 @@ function processInstagramAttachments(message) {
 
         if (attachmentType === "ig_reel") {
             mediaId = payload.reel_video_id;
-            url = payload.url || null;
+            url =
+                payload.url ||
+                payload.permalink ||
+                null;
         }
 
         if (attachmentType === "ig_post") {
             mediaId = payload.ig_post_media_id;
 
             /*
-             * Meta may provide a temporary CDN URL
-             * for ig_post attachments instead of a
-             * permanent Instagram post URL.
+             * Meta's ig_post webhook attachment can
+             * provide the Instagram post URL.
+             *
+             * Keep it instead of discarding it.
              */
-            url = null;
+            url =
+                payload.url ||
+                payload.permalink ||
+                null;
         }
 
         const cta = detectCTA(title);
