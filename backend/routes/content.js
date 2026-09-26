@@ -92,10 +92,15 @@ router.get("/saved", (req, res) => {
                     saved_content.created_at,
                     instagram_shared_posts.title,
                     instagram_shared_posts.media_id,
-                    instagram_shared_posts.media_type
+                    instagram_shared_posts.media_type,
+                    COALESCE(instagram_shared_posts.original_url, instagram_shared_posts.url) AS original_url,
+                    instagram_shared_posts.resource_url,
+                    instagram_shared_posts.action_status
                 FROM saved_content
                 LEFT JOIN instagram_shared_posts
                     ON saved_content.url = instagram_shared_posts.url
+                    OR (instagram_shared_posts.original_url IS NOT NULL AND saved_content.url = instagram_shared_posts.original_url)
+                    OR (instagram_shared_posts.resource_url IS NOT NULL AND saved_content.url = instagram_shared_posts.resource_url)
                 ORDER BY saved_content.id DESC
             `)
             .all();

@@ -186,6 +186,79 @@ if (!hasActionStatusColumn) {
     );
 }
 
+const hasOriginalUrlColumn = sharedPostColumns.some(
+    (column) => column.name === "original_url"
+);
+
+const hasResourceUrlColumn = sharedPostColumns.some(
+    (column) => column.name === "resource_url"
+);
+
+if (!hasOriginalUrlColumn) {
+    db.exec(`
+        ALTER TABLE instagram_shared_posts
+        ADD COLUMN original_url TEXT
+    `);
+
+    console.log(
+        "Added original_url column to instagram_shared_posts!"
+    );
+}
+
+if (!hasResourceUrlColumn) {
+    db.exec(`
+        ALTER TABLE instagram_shared_posts
+        ADD COLUMN resource_url TEXT
+    `);
+
+    console.log(
+        "Added resource_url column to instagram_shared_posts!"
+    );
+}
+
+const hasRecipientIdColumn = sharedPostColumns.some(
+    (column) => column.name === "recipient_id"
+);
+
+if (!hasRecipientIdColumn) {
+    db.exec(`
+        ALTER TABLE instagram_shared_posts
+        ADD COLUMN recipient_id TEXT
+    `);
+
+    console.log(
+        "Added recipient_id column to instagram_shared_posts!"
+    );
+}
+
+db.exec(`
+    UPDATE instagram_shared_posts
+    SET resource_url = NULL,
+        action_status = CASE WHEN action_status = 'LINK_RECEIVED' THEN 'READY' ELSE action_status END
+    WHERE resource_url LIKE '%fbsbx.com%'
+       OR resource_url LIKE '%cdninstagram.com%'
+       OR resource_url LIKE '%instagram.com%'
+`);
+
+db.exec(`
+    UPDATE instagram_shared_posts
+    SET original_url = url
+    WHERE original_url IS NULL
+      AND url IS NOT NULL
+      AND (url LIKE '%instagram.com%' OR url LIKE '%instagr.am%')
+`);
+
+db.exec(`
+    UPDATE instagram_shared_posts
+    SET resource_url = url
+    WHERE resource_url IS NULL
+      AND url IS NOT NULL
+      AND url NOT LIKE '%instagram.com%'
+      AND url NOT LIKE '%instagr.am%'
+      AND url NOT LIKE '%fbsbx.com%'
+      AND url NOT LIKE '%cdninstagram.com%'
+`);
+
 console.log("Database ready!");
 
 module.exports = db;

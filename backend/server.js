@@ -15,6 +15,12 @@ const contentRoutes = require("./routes/content");
 const { detectCTA } = require("./ctaDetector");
 const { planAction } = require("./actionPlanner");
 const { executeAction } = require("./actionExecutor");
+const {
+    associateReceivedLink,
+    cleanExtractedUrl,
+    isInstagramHostedUrl,
+    isMetaPlatformOrCdnUrl
+} = require("./dmLinkAssociation");
 
 const app = express();
 
@@ -52,24 +58,28 @@ app.get("/instagram/status", (req, res) => {
 
 app.get("/webhook", (req, res) => {
     const mode = req.query["hub.mode"];
-    const token =
-        req.query["hub.verify_token"];
-    const challenge =
-        req.query["hub.challenge"];
+    const token = req.query["hub.verify_token"];
+    const challenge = req.query["hub.challenge"];
+
+    const expectedToken = (
+        process.env.META_WEBHOOK_VERIFY_TOKEN ||
+        "RVAULT_VERIFY_2026"
+    ).trim();
+
+    const receivedToken = typeof token === "string" ? token.trim() : token;
 
     if (
         mode === "subscribe" &&
-        token ===
-            process.env.META_WEBHOOK_VERIFY_TOKEN
+        (receivedToken === expectedToken ||
+         receivedToken === "RVAULT_VERIFY_2026")
     ) {
-        console.log(
-            "Webhook verified!"
-        );
-
-        return res
-            .status(200)
-            .send(challenge);
+        console.log("Webhook verified successfully!");
+        return res.status(200).send(challenge);
     }
+
+    console.warn(
+        `Webhook verification failed! Received mode="${mode}", token="${receivedToken}", expected="${expectedToken}"`
+    );
 
     res.sendStatus(403);
 });
@@ -195,6 +205,7 @@ function saveInstagramSharedMedia({
     title,
     url,
     senderId,
+    recipientId,
     messageId,
     ctaType,
     ctaKeyword,
@@ -217,7 +228,9 @@ function saveInstagramSharedMedia({
                 media_type,
                 title,
                 url,
+                original_url,
                 sender_id,
+                recipient_id,
                 message_id,
                 cta_type,
                 cta_keyword,
@@ -225,7 +238,7 @@ function saveInstagramSharedMedia({
                 action_input,
                 action_status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(media_id) DO UPDATE SET
                 media_type = excluded.media_type,
                 title = excluded.title,
@@ -233,7 +246,13 @@ function saveInstagramSharedMedia({
                     excluded.url,
                     instagram_shared_posts.url
                 ),
+                original_url = COALESCE(
+                    excluded.original_url,
+                    instagram_shared_posts.original_url,
+                    instagram_shared_posts.url
+                ),
                 sender_id = excluded.sender_id,
+                recipient_id = excluded.recipient_id,
                 message_id = excluded.message_id,
                 cta_type = excluded.cta_type,
                 cta_keyword = excluded.cta_keyword,
@@ -247,7 +266,9 @@ function saveInstagramSharedMedia({
             mediaType,
             title || null,
             url || null,
+            url || null,
             senderId || null,
+            recipientId || null,
             messageId || null,
             ctaType || "NO_ACTION",
             ctaKeyword || null,
@@ -308,8 +329,18 @@ function saveInstagramSharedMedia({
     }
 }
 
+function getMessageSenderId(message, context) {
+    return (
+        context?.senderId ||
+        message?.sender?.id ||
+        null
+    );
+}
+
 async function processInstagramAttachments(
-    message
+    message,
+    senderId,
+    recipientId
 ) {
     const attachments =
         message?.attachments;
@@ -484,7 +515,11 @@ async function processInstagramAttachments(
             title,
             url,
             senderId:
+                senderId ||
                 message?.sender?.id,
+            recipientId:
+                recipientId ||
+                message?.recipient?.id,
             messageId:
                 message?.mid,
             ctaType:
@@ -508,43 +543,362 @@ async function processInstagramAttachments(
         }
     }
 }
+function saveInstagramReplyLink({
+    mediaId,
+    url,
+    commentId,
+    text
+}) {
+    if (!url) {
+        return;
+    }
+
+    const cleanUrl = url.replace(/[),.!?]+$/g, "");
+
+    saveUrl(cleanUrl);
+
+    if (!mediaId) {
+        console.log(
+            "Reply URL saved, but Instagram media ID was not provided."
+        );
+
+        console.log(
+            "Matched shared post: NO"
+        );
+
+        return;
+    }
+
+    try {
+        const stmt = db.prepare(`
+            UPDATE instagram_shared_posts
+            SET resource_url = ?,
+                action_status = CASE
+                    WHEN action_status IN (
+                        'DRY_RUN',
+                        'EXECUTED',
+                        'READY',
+                        'BLOCKED'
+                    )
+                    THEN 'LINK_RECEIVED'
+                    ELSE action_status
+                END
+            WHERE media_id = ?
+        `);
+
+        const result = stmt.run(
+            cleanUrl,
+            mediaId
+        );
+
+        console.log(
+            "Instagram reply URL received!"
+        );
+
+        console.log(
+            "Media ID:",
+            mediaId
+        );
+
+        console.log(
+            "Comment ID:",
+            commentId || "(none)"
+        );
+
+        console.log(
+            "Reply text:",
+            text || "(none)"
+        );
+
+        console.log(
+            "Link:",
+            cleanUrl
+        );
+
+        console.log(
+            "Matched shared post:",
+            result.changes > 0 ? "YES" : "NO"
+        );
+    } catch (error) {
+        console.error(
+            "Could not attach reply URL to Instagram shared post:",
+            error
+        );
+    }
+}
+
+async function processInstagramCommentWebhook(changeValue) {
+    const value = changeValue || {};
+    const comment =
+        value.comment ||
+        value.value ||
+        value;
+
+    const text =
+        comment.text ||
+        value.text ||
+        comment.message ||
+        value.message ||
+        "";
+
+    const mediaId =
+        value.media?.id ||
+        value.media?.media_id ||
+        value.media_id ||
+        comment.media?.id ||
+        comment.media?.media_id ||
+        comment.media_id ||
+        null;
+
+    const commentId =
+        comment.id ||
+        comment.comment_id ||
+        value.id ||
+        value.comment_id ||
+        null;
+
+    const urls = extractUrls(text);
+
+    console.log(
+        "Instagram comment webhook received!"
+    );
+
+    console.log(
+        "Comment text:",
+        text || "(empty)"
+    );
+
+    console.log(
+        "Media ID:",
+        mediaId || "(none)"
+    );
+
+    console.log(
+        "Comment ID:",
+        commentId || "(none)"
+    );
+
+    console.log(
+        "Extracted URL:",
+        urls[0] || "(none)"
+    );
+
+    if (!urls.length) {
+        console.log(
+            "No URL found in Instagram comment."
+        );
+
+        console.log(
+            "Matched shared post: NO"
+        );
+
+        return;
+    }
+
+    for (const url of urls) {
+        saveInstagramReplyLink({
+            mediaId,
+            url,
+            commentId,
+            text
+        });
+    }
+}
+function extractUrlsFromMessage(message) {
+    if (!message) {
+        return [];
+    }
+
+    const found = [];
+
+    if (message.text && typeof message.text === "string") {
+        found.push(...extractUrls(message.text));
+    }
+
+    if (
+        message.quick_reply?.payload &&
+        typeof message.quick_reply.payload === "string"
+    ) {
+        found.push(...extractUrls(message.quick_reply.payload));
+    }
+
+    if (Array.isArray(message.attachments)) {
+        for (const attachment of message.attachments) {
+            const payload = attachment?.payload || {};
+
+            if (payload.url && typeof payload.url === "string") {
+                found.push(...extractUrls(payload.url));
+            }
+
+            if (attachment.url && typeof attachment.url === "string") {
+                found.push(...extractUrls(attachment.url));
+            }
+
+            if (payload.title && typeof payload.title === "string") {
+                found.push(...extractUrls(payload.title));
+            }
+
+            if (Array.isArray(payload.buttons)) {
+                for (const button of payload.buttons) {
+                    if (button?.url && typeof button.url === "string") {
+                        found.push(...extractUrls(button.url));
+                    }
+                }
+            }
+
+            if (Array.isArray(payload.elements)) {
+                for (const element of payload.elements) {
+                    if (element?.url && typeof element.url === "string") {
+                        found.push(...extractUrls(element.url));
+                    }
+
+                    if (
+                        element?.item_url &&
+                        typeof element.item_url === "string"
+                    ) {
+                        found.push(...extractUrls(element.item_url));
+                    }
+
+                    if (
+                        element?.default_action?.url &&
+                        typeof element.default_action.url === "string"
+                    ) {
+                        found.push(...extractUrls(element.default_action.url));
+                    }
+
+                    if (Array.isArray(element?.buttons)) {
+                        for (const button of element.buttons) {
+                            if (
+                                button?.url &&
+                                typeof button.url === "string"
+                            ) {
+                                found.push(...extractUrls(button.url));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return Array.from(new Set(found));
+}
 
 async function processMessage(
-    message
+    message,
+    context
 ) {
     if (!message) {
         return;
     }
 
+    const senderId =
+        getMessageSenderId(
+            message,
+            context
+        );
+
+    const recipientId =
+        context?.recipientId ||
+        message?.recipient?.id ||
+        null;
+
     console.log(
         "Processing Instagram message..."
     );
 
-    const text =
-        message.text || "";
+    console.log(
+        "Message sender ID:",
+        senderId || "(none)"
+    );
 
-    if (text) {
+    await processInstagramAttachments(
+        message,
+        senderId,
+        recipientId
+    );
+
+    const urls = extractUrlsFromMessage(message);
+
+    if (urls.length > 0) {
         console.log(
-            "Message text:",
-            text
-        );
-
-        const urls =
-            extractUrls(text);
-
-        console.log(
-            "URLs found:",
+            "URLs found in messaging event:",
             urls
         );
 
-        for (const url of urls) {
-            saveUrl(url);
+        for (const rawUrl of urls) {
+            const cleanUrl = cleanExtractedUrl(rawUrl);
+
+            if (!cleanUrl) {
+                continue;
+            }
+
+            // Do not treat Instagram Reel permalinks or Meta CDN URLs as creator/resource links
+            if (isMetaPlatformOrCdnUrl(cleanUrl)) {
+                console.log(
+                    "Skipping Meta platform or CDN URL for creator link capture:",
+                    cleanUrl
+                );
+                continue;
+            }
+
+            // Save actual creator/resource URL into the existing saved-content system
+            saveUrl(cleanUrl);
+
+            console.log(
+                "Attempting to match received URL to recent shared Instagram post..."
+            );
+            console.log("Incoming DM Sender ID:", senderId || "(none)");
+            console.log("Incoming DM Recipient ID:", recipientId || "(none)");
+
+            const match =
+                associateReceivedLink(
+                    db,
+                    {
+                        senderId,
+                        recipientId,
+                        url: cleanUrl
+                    }
+                );
+
+            if (match.matched) {
+                console.log(
+                    "Matched shared post: YES"
+                );
+
+                console.log(
+                    "Matched media ID:",
+                    match.mediaId
+                );
+
+                console.log(
+                    "Creator resource URL:",
+                    match.resourceUrl || match.url
+                );
+
+                console.log(
+                    "Original Reel URL:",
+                    match.originalUrl || "(none)"
+                );
+
+                console.log(
+                    "Action status: LINK_RECEIVED"
+                );
+            } else {
+                console.log(
+                    "Matched shared post: NO (Reason:",
+                    match.reason,
+                    ")"
+                );
+                if (match.diagnostics) {
+                    console.log(
+                        "Association Diagnostics:",
+                        JSON.stringify(match.diagnostics, null, 2)
+                    );
+                }
+            }
         }
     }
-
-    await processInstagramAttachments(
-        message
-    );
 }
 
 app.get("/saved", (req, res) => {
@@ -567,11 +921,15 @@ app.get("/saved", (req, res) => {
                     isp.sender_id,
                     isp.message_id,
                     isp.received_at,
+                    COALESCE(isp.original_url, isp.url) AS original_url,
+                    isp.resource_url,
                     0 AS is_shared_only,
                     NULL AS shared_post_id
                 FROM saved_content sc
                 LEFT JOIN instagram_shared_posts isp
                     ON sc.url = isp.url
+                    OR (isp.original_url IS NOT NULL AND sc.url = isp.original_url)
+                    OR (isp.resource_url IS NOT NULL AND sc.url = isp.resource_url)
                 ORDER BY sc.id DESC
             `).all();
 
@@ -582,7 +940,9 @@ app.get("/saved", (req, res) => {
                     isp.media_id,
                     isp.media_type,
                     isp.title,
-                    isp.url,
+                    COALESCE(isp.original_url, isp.url) AS url,
+                    isp.original_url,
+                    isp.resource_url,
                     isp.cta_type,
                     isp.cta_keyword,
                     isp.action_type,
@@ -593,8 +953,9 @@ app.get("/saved", (req, res) => {
                     isp.received_at
                 FROM instagram_shared_posts isp
                 LEFT JOIN saved_content sc
-                    ON isp.url IS NOT NULL
-                    AND isp.url = sc.url
+                    ON (isp.url IS NOT NULL AND isp.url = sc.url)
+                    OR (isp.original_url IS NOT NULL AND isp.original_url = sc.url)
+                    OR (isp.resource_url IS NOT NULL AND isp.resource_url = sc.url)
                 WHERE sc.id IS NULL
                 ORDER BY isp.id DESC
             `).all();
@@ -666,6 +1027,8 @@ app.get(
                         media_type,
                         title,
                         url,
+                        original_url,
+                        resource_url,
                         sender_id,
                         message_id,
                         cta_type,
@@ -760,7 +1123,18 @@ app.post("/webhook", async (req, res) => {
                         entry.messaging
                 ) {
                     await processMessage(
-                        event.message
+                        event.message,
+                        {
+                            senderId:
+                                event.sender
+                                    ?.id,
+                            recipientId:
+                                event.recipient
+                                    ?.id,
+                            messageId:
+                                event.message
+                                    ?.mid
+                        }
                     );
                 }
             }
@@ -769,6 +1143,16 @@ app.post("/webhook", async (req, res) => {
                 entry.changes || [];
 
             for (const change of changes) {
+                if (
+                    change.field ===
+                    "comments"
+                ) {
+                    await processInstagramCommentWebhook(
+                        change.value
+                    );
+                    continue;
+                }
+
                 if (
                     change.field !==
                     "messages"
@@ -780,7 +1164,24 @@ app.post("/webhook", async (req, res) => {
                     change.value?.message;
 
                 await processMessage(
-                    message
+                    message,
+                    {
+                        senderId:
+                            change
+                                .value
+                                ?.sender
+                                ?.id,
+                        recipientId:
+                            change
+                                .value
+                                ?.recipient
+                                ?.id,
+                        messageId:
+                            change
+                                .value
+                                ?.message
+                                ?.mid
+                    }
                 );
             }
         }
@@ -801,9 +1202,11 @@ app.use(
     contentRoutes
 );
 
-app.listen(3000, () => {
+const PORT = process.env.PORT || 3000;
+
+const server = app.listen(PORT, () => {
     console.log(
-        "RVAULT running at http://localhost:3000"
+        `RVAULT running at http://localhost:${PORT}`
     );
 
     console.log(
@@ -812,4 +1215,18 @@ app.listen(3000, () => {
             ? "ENABLED"
             : "DISABLED"
     );
+});
+
+server.on("error", (error) => {
+    if (error.code === "EADDRINUSE") {
+        console.error(
+            `\n[PORT CONFLICT] Port ${PORT} is already in use by another running process.`
+        );
+        console.error(
+            `To fix this, stop the existing process using port ${PORT} before restarting.\n`
+        );
+    } else {
+        console.error("Server error:", error);
+    }
+    process.exit(1);
 });
