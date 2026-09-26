@@ -1,14 +1,23 @@
-require("dotenv").config();
+const path = require("path");
+
+require("dotenv").config({
+    path: path.resolve(
+        __dirname,
+        "..",
+        ".env"
+    )
+});
 
 const META_API_VERSION = "v26.0";
 const META_GRAPH_URL = "https://graph.instagram.com";
 
 function getAccessToken() {
-    const token = process.env.INSTAGRAM_ACCESS_TOKEN;
+    const token =
+        process.env.INSTAGRAM_ACCESS_TOKEN;
 
     if (!token) {
         throw new Error(
-            "INSTAGRAM_ACCESS_TOKEN is missing from .env"
+            "INSTAGRAM_ACCESS_TOKEN is missing from RVAULT/.env"
         );
     }
 
@@ -16,18 +25,21 @@ function getAccessToken() {
 }
 
 function checkActionSupport(actionType) {
-    const action = (actionType || "NONE").toUpperCase();
+    const action =
+        (actionType || "NONE").toUpperCase();
 
-    const supportedActions = new Set([
-        "NONE",
-        "COMMENT"
-    ]);
+    const supportedActions =
+        new Set([
+            "NONE",
+            "COMMENT"
+        ]);
 
     if (supportedActions.has(action)) {
         return {
             supported: true,
             action,
-            requiresMetaExecution: action === "COMMENT"
+            requiresMetaExecution:
+                action === "COMMENT"
         };
     }
 
@@ -48,7 +60,8 @@ async function executeInstagramComment({
             success: false,
             status: "FAILED",
             action: "COMMENT",
-            message: "Instagram media ID is missing."
+            message:
+                "Instagram media ID is missing."
         };
     }
 
@@ -58,21 +71,24 @@ async function executeInstagramComment({
             status: "FAILED",
             action: "COMMENT",
             mediaId,
-            message: "Comment text is missing."
+            message:
+                "Comment text is missing."
         };
     }
 
     let accessToken;
 
     try {
-        accessToken = getAccessToken();
+        accessToken =
+            getAccessToken();
     } catch (error) {
         return {
             success: false,
             status: "FAILED",
             action: "COMMENT",
             mediaId,
-            message: error.message
+            message:
+                error.message
         };
     }
 
@@ -80,26 +96,39 @@ async function executeInstagramComment({
         `${META_GRAPH_URL}/${META_API_VERSION}/${encodeURIComponent(mediaId)}/comments`;
 
     try {
-        const body = new URLSearchParams();
+        const body =
+            new URLSearchParams();
 
-        body.append("message", comment);
-        body.append("access_token", accessToken);
-
-        const response = await fetch(
-            endpoint,
-            {
-                method: "POST",
-                headers: {
-                    "Content-Type":
-                        "application/x-www-form-urlencoded"
-                },
-                body
-            }
+        body.append(
+            "message",
+            comment
         );
 
-        const data = await response.json();
+        body.append(
+            "access_token",
+            accessToken
+        );
 
-        if (!response.ok || data.error) {
+        const response =
+            await fetch(
+                endpoint,
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type":
+                            "application/x-www-form-urlencoded"
+                    },
+                    body
+                }
+            );
+
+        const data =
+            await response.json();
+
+        if (
+            !response.ok ||
+            data.error
+        ) {
             console.error(
                 "Meta COMMENT API error:",
                 JSON.stringify(
@@ -119,9 +148,12 @@ async function executeInstagramComment({
                     data?.error?.message ||
                     "Instagram comment request failed.",
                 errorCode:
-                    data?.error?.code || null,
+                    data?.error?.code ||
+                    null,
                 errorSubcode:
-                    data?.error?.error_subcode || null,
+                    data?.error
+                        ?.error_subcode ||
+                    null,
                 metaResponse: data
             };
         }
@@ -132,7 +164,8 @@ async function executeInstagramComment({
             action: "COMMENT",
             mediaId,
             input: comment,
-            commentId: data.id || null,
+            commentId:
+                data.id || null,
             message:
                 "Comment posted successfully to Instagram."
         };
@@ -148,19 +181,25 @@ async function executeInstagramComment({
             action: "COMMENT",
             mediaId,
             input: comment,
-            message: error.message
+            message:
+                error.message
         };
     }
 }
 
-async function executeAction(actionPlan) {
-    const actionType = (
-        actionPlan?.action || "NONE"
-    ).toUpperCase();
+async function executeAction(
+    actionPlan
+) {
+    const actionType =
+        (
+            actionPlan?.action ||
+            "NONE"
+        ).toUpperCase();
 
-    const support = checkActionSupport(
-        actionType
-    );
+    const support =
+        checkActionSupport(
+            actionType
+        );
 
     if (!support.supported) {
         return {
@@ -168,10 +207,13 @@ async function executeAction(actionPlan) {
             status: "UNSUPPORTED",
             action: actionType,
             input:
-                actionPlan?.input || null,
+                actionPlan?.input ||
+                null,
             mediaId:
-                actionPlan?.mediaId || null,
-            message: support.reason
+                actionPlan?.mediaId ||
+                null,
+            message:
+                support.reason
         };
     }
 
@@ -201,9 +243,11 @@ async function executeAction(actionPlan) {
         status: "NOT_IMPLEMENTED",
         action: actionType,
         input:
-            actionPlan?.input || null,
+            actionPlan?.input ||
+            null,
         mediaId:
-            actionPlan?.mediaId || null,
+            actionPlan?.mediaId ||
+            null,
         message:
             "Action is not implemented."
     };
