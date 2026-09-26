@@ -24,6 +24,15 @@ function getAccessToken() {
     return token.trim();
 }
 
+function isDryRunEnabled() {
+    return (
+        String(
+            process.env.ACTION_EXECUTOR_DRY_RUN ||
+            "false"
+        ).toLowerCase() === "true"
+    );
+}
+
 function checkActionSupport(actionType) {
     const action =
         (actionType || "NONE").toUpperCase();
@@ -73,6 +82,21 @@ async function executeInstagramComment({
             mediaId,
             message:
                 "Comment text is missing."
+        };
+    }
+
+    if (isDryRunEnabled()) {
+        return {
+            success: true,
+            status: "DRY_RUN",
+            action: "COMMENT",
+            mediaId,
+            input: comment,
+            endpoint:
+                `${META_GRAPH_URL}/${META_API_VERSION}/${encodeURIComponent(mediaId)}/comments`,
+            method: "POST",
+            message:
+                "Dry run successful. No Instagram comment was posted."
         };
     }
 
@@ -256,5 +280,6 @@ async function executeAction(
 module.exports = {
     checkActionSupport,
     executeAction,
-    executeInstagramComment
+    executeInstagramComment,
+    isDryRunEnabled
 };
