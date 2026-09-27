@@ -473,7 +473,17 @@ async function processInstagramAttachments(
             actionPlan.status ===
             "READY"
         ) {
-            if (
+            if (mediaType === "ig_reel") {
+                actionResult = {
+                    success: true,
+                    status: "RECEIVED",
+                    action: actionPlan.action,
+                    input: actionPlan.input || null,
+                    mediaId,
+                    message:
+                        "Foreign Instagram Reel received. Public comment action was not executed because the shared Reel ID is not accessible to the connected account."
+                };
+            } else if (
                 !isMetaExecutionEnabled()
             ) {
                 actionResult = {
