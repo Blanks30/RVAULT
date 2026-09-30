@@ -1,6 +1,14 @@
+const path = require("path");
 const Database = require("better-sqlite3");
 
-const db = new Database("ravault.db");
+// Anchor to the project root (one level above this backend/ directory)
+// so the same ravault.db is used regardless of the working directory
+// Node is started from. Previously `new Database("ravault.db")` was
+// CWD-relative, which created a second empty file when started from
+// backend/ instead of the project root.
+const DB_PATH = path.join(__dirname, "..", "ravault.db");
+
+const db = new Database(DB_PATH);
 
 db.exec(`
     CREATE TABLE IF NOT EXISTS saved_content (

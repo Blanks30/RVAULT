@@ -1,46 +1,8 @@
 const express = require("express");
 const db = require("../database");
+const { detectPlatform } = require("../utils/platformDetector");
 
 const router = express.Router();
-
-function detectPlatform(url) {
-    try {
-        const hostname = new URL(url).hostname.toLowerCase();
-
-        if (
-            hostname === "instagram.com" ||
-            hostname.endsWith(".instagram.com")
-        ) {
-            return "Instagram";
-        }
-
-        if (
-            hostname === "youtube.com" ||
-            hostname.endsWith(".youtube.com") ||
-            hostname === "youtu.be"
-        ) {
-            return "YouTube";
-        }
-
-        if (
-            hostname === "tiktok.com" ||
-            hostname.endsWith(".tiktok.com")
-        ) {
-            return "TikTok";
-        }
-
-        if (
-            hostname === "reddit.com" ||
-            hostname.endsWith(".reddit.com")
-        ) {
-            return "Reddit";
-        }
-
-        return "Unknown";
-    } catch (error) {
-        return "Unknown";
-    }
-}
 
 router.post("/save", (req, res) => {
     const { url } = req.body;
@@ -82,37 +44,14 @@ router.post("/save", (req, res) => {
 });
 
 router.get("/saved", (req, res) => {
-    try {
-        const rows = db
-            .prepare(`
-                SELECT
-                    saved_content.id,
-                    saved_content.url,
-                    saved_content.platform,
-                    saved_content.created_at,
-                    instagram_shared_posts.title,
-                    instagram_shared_posts.media_id,
-                    instagram_shared_posts.media_type,
-                    COALESCE(instagram_shared_posts.original_url, instagram_shared_posts.url) AS original_url,
-                    instagram_shared_posts.resource_url,
-                    instagram_shared_posts.action_status
-                FROM saved_content
-                LEFT JOIN instagram_shared_posts
-                    ON saved_content.url = instagram_shared_posts.url
-                    OR (instagram_shared_posts.original_url IS NOT NULL AND saved_content.url = instagram_shared_posts.original_url)
-                    OR (instagram_shared_posts.resource_url IS NOT NULL AND saved_content.url = instagram_shared_posts.resource_url)
-                ORDER BY saved_content.id DESC
-            `)
-            .all();
-
-        res.json(rows);
-    } catch (error) {
-        console.error("Could not fetch saved content:", error);
-
-        res.status(500).json({
-            error: "Could not fetch saved content"
-        });
-    }
+    // NOTE: This route is intentionally NOT defined here.
+    // GET /saved is defined in server.js with the full query that includes
+    // CTA fields, shared-only rows, is_shared_only, and shared_post_id.
+    // That definition is registered before this router is mounted, so it
+    // always wins. Defining it here was dead code and has been removed.
+    //
+    // If you need to change the GET /saved behaviour, edit server.js.
+    res.status(404).json({ error: "Not implemented here — see server.js GET /saved" });
 });
 
 router.delete("/saved/:id", (req, res) => {

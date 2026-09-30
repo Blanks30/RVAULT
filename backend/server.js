@@ -12,6 +12,7 @@ const express = require("express");
 const cors = require("cors");
 const db = require("./database");
 const contentRoutes = require("./routes/content");
+const { detectPlatform } = require("./utils/platformDetector");
 const { detectCTA } = require("./ctaDetector");
 const { planAction } = require("./actionPlanner");
 const { executeAction } = require("./actionExecutor");
@@ -100,59 +101,8 @@ function extractUrls(text) {
     );
 }
 
-function detectPlatform(url) {
-    try {
-        const hostname =
-            new URL(url)
-                .hostname
-                .toLowerCase();
-
-        if (
-            hostname ===
-                "instagram.com" ||
-            hostname.endsWith(
-                ".instagram.com"
-            )
-        ) {
-            return "Instagram";
-        }
-
-        if (
-            hostname ===
-                "youtube.com" ||
-            hostname.endsWith(
-                ".youtube.com"
-            ) ||
-            hostname === "youtu.be"
-        ) {
-            return "YouTube";
-        }
-
-        if (
-            hostname ===
-                "tiktok.com" ||
-            hostname.endsWith(
-                ".tiktok.com"
-            )
-        ) {
-            return "TikTok";
-        }
-
-        if (
-            hostname ===
-                "reddit.com" ||
-            hostname.endsWith(
-                ".reddit.com"
-            )
-        ) {
-            return "Reddit";
-        }
-
-        return "Unknown";
-    } catch (error) {
-        return "Unknown";
-    }
-}
+// detectPlatform is imported from ./utils/platformDetector
+// (removed local copy to avoid divergence)
 
 function saveUrl(url) {
     const platform =
