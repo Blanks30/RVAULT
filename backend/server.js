@@ -15,7 +15,7 @@ const contentRoutes = require("./routes/content");
 const { detectPlatform } = require("./utils/platformDetector");
 const { detectCTA } = require("./ctaDetector");
 const { planAction } = require("./actionPlanner");
-const { executeAction } = require("./actionExecutor");
+const { executeAction, executeInstagramDM } = require("./actionExecutor");
 const {
     associateReceivedLink,
     cleanExtractedUrl,
@@ -424,6 +424,10 @@ async function processInstagramAttachments(
             "READY"
         ) {
             if (mediaType === "ig_reel") {
+                // We cannot comment on a foreign Reel (Meta API Error 100/subcode 33).
+                // Instead, send the sender a DM acknowledging their Reel and requesting
+                // they share the resource link. This closes the product loop:
+                // User shares Reel → RVAULT DMs them back → User sends the resource link.
                 actionResult = {
                     success: true,
                     status: "RECEIVED",
@@ -433,6 +437,52 @@ async function processInstagramAttachments(
                     message:
                         "Foreign Instagram Reel received. Public comment action was not executed because the shared Reel ID is not accessible to the connected account."
                 };
+
+                // Only DM the sender if we have their IGSID and Meta actions are enabled
+                if (
+                    isMetaExecutionEnabled() &&
+                    (senderId || recipientId)
+                ) {
+                    const dmRecipientId = senderId || recipientId;
+                    const ctaKeyword = actionPlan.input;
+
+                    // Compose the DM: acknowledge the Reel and ask for the resource link
+                    const dmText = ctaKeyword
+                        ? `Hey! I saw you shared a reel with the keyword "${ctaKeyword}" 👀 Drop me the resource link and I'll save it for you! 🔗`
+                        : `Hey! I received your shared reel. Drop me the resource link and I'll save it for you! 🔗`;
+
+                    console.log(
+                        "Sending DM to reel sender:",
+                        dmRecipientId
+                    );
+
+                    const dmResult = await executeInstagramDM({
+                        recipientId: dmRecipientId,
+                        text: dmText
+                    });
+
+                    console.log(
+                        "DM result:",
+                        JSON.stringify(dmResult, null, 2)
+                    );
+
+                    // Update actionResult to reflect the DM attempt
+                    if (dmResult.success) {
+                        actionResult = {
+                            ...actionResult,
+                            status: "DM_SENT",
+                            dmMessageId: dmResult.messageId || null,
+                            message:
+                                "Reel received. DM sent to sender requesting resource link."
+                        };
+                    } else {
+                        // DM failed — keep RECEIVED status and log the reason
+                        console.warn(
+                            "DM to reel sender failed:",
+                            dmResult.message
+                        );
+                    }
+                }
             } else if (
                 !isMetaExecutionEnabled()
             ) {
@@ -883,6 +933,7 @@ app.get("/saved", (req, res) => {
                     isp.received_at,
                     COALESCE(isp.original_url, isp.url) AS original_url,
                     isp.resource_url,
+                    isp.resource_platform,
                     0 AS is_shared_only,
                     NULL AS shared_post_id
                 FROM saved_content sc
@@ -903,6 +954,7 @@ app.get("/saved", (req, res) => {
                     COALESCE(isp.original_url, isp.url) AS url,
                     isp.original_url,
                     isp.resource_url,
+                    isp.resource_platform,
                     isp.cta_type,
                     isp.cta_keyword,
                     isp.action_type,

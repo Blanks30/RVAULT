@@ -294,9 +294,14 @@ function associateReceivedLink(
     }
 
     // Preserve the original Reel URL in original_url & url; save creator link into resource_url
+    // Also detect and store the resource platform
+    const { detectPlatform } = require("./utils/platformDetector");
+    const resourcePlatform = detectPlatform(cleaned);
+
     db.prepare(`
         UPDATE instagram_shared_posts
         SET resource_url = ?,
+            resource_platform = ?,
             action_status = 'LINK_RECEIVED',
             original_url = COALESCE(
                 original_url,
@@ -307,7 +312,7 @@ function associateReceivedLink(
                 END
             )
         WHERE id = ?
-    `).run(cleaned, post.id);
+    `).run(cleaned, resourcePlatform, post.id);
 
     return {
         matched: true,

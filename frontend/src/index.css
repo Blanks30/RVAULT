@@ -99,7 +99,7 @@ main {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 24px;
   margin-bottom: 48px;
 }
@@ -438,4 +438,220 @@ main {
   .date {
       text-align: left;
   }
+}
+
+/* ── Card badges row (media type + action status side by side) ── */
+
+.card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+}
+
+/* ── Action status badges ── */
+
+.action-status-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 4px 9px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.status-link-received {
+  background: #0d2218;
+  color: #4ade80;
+  border-color: #1a4a2e;
+}
+
+.status-executed {
+  background: #0d2218;
+  color: #34d399;
+  border-color: #1a4a2e;
+}
+
+.status-dry-run {
+  background: #141d2e;
+  color: #7db7ff;
+  border-color: #1e3050;
+}
+
+.status-dm-sent {
+  background: #0e1e2e;
+  color: #60a5fa;
+  border-color: #1a3a5c;
+}
+
+.status-ready {
+  background: #1a1f10;
+  color: #a3e635;
+  border-color: #2d3f14;
+}
+
+.status-received {
+  background: #1a1f10;
+  color: #bef264;
+  border-color: #2d3f14;
+}
+
+.status-blocked {
+  background: #1e1810;
+  color: #fbbf24;
+  border-color: #3b2e10;
+}
+
+.status-failed {
+  background: #241515;
+  color: #f87171;
+  border-color: #4a1f1f;
+}
+
+.status-needs-input {
+  background: #1e1810;
+  color: #fb923c;
+  border-color: #3b2e10;
+}
+
+.status-no-action {
+  background: #12141a;
+  color: #6b7280;
+  border-color: #23262e;
+}
+
+.status-unknown {
+  background: #12141a;
+  color: #9ca3af;
+  border-color: #23262e;
+}
+
+/* ── Resource Link box ── */
+
+.resource-link-box {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 14px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid #1a3a25;
+  border-radius: 10px;
+  background: #0c1f14;
+}
+
+.resource-link-label {
+  color: #4ade80;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.resource-link-url {
+  color: #6ee7a0 !important;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.resource-link-url:hover {
+  text-decoration: underline;
+}
+
+/* ── Card with a captured resource gets a subtle green left accent ── */
+
+.content-card.has-resource {
+  border-left: 3px solid #1a4a2e;
+}
+
+/* ── Source URL (smaller, secondary) ── */
+
+.source-url {
+  display: block;
+  margin-top: 10px;
+  overflow-wrap: anywhere;
+  font-size: 12px !important;
+  color: #526070 !important;
+  line-height: 1.5;
+}
+
+.source-url:hover {
+  color: #7db7ff !important;
+}
+
+/* ── Responsive: collapse stats to 1 column on mobile (handled by existing @media block above) ── */
+
+/* ── Add Resource Form ── */
+
+.add-resource-form {
+  max-width: 600px;
+  margin: 24px auto;
+  padding: 24px;
+  background: #12141a;
+  border: 1px solid #23262e;
+  border-radius: 12px;
+}
+
+.add-resource-form h3 {
+  margin: 0 0 16px;
+  color: #f9fafb;
+  font-size: 18px;
+}
+
+.add-resource-form form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.add-resource-form input[type="url"] {
+  padding: 12px;
+  background: #1a1d24;
+  border: 1px solid #2d3139;
+  border-radius: 8px;
+  color: #f9fafb;
+  font-size: 14px;
+}
+
+.add-resource-form input[type="url"]:focus {
+  outline: none;
+  border-color: #4ade80;
+}
+
+.add-resource-form input[type="url"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.add-resource-form button[type="submit"] {
+  padding: 12px;
+  background: #16a34a;
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.add-resource-form button[type="submit"]:hover:not(:disabled) {
+  background: #15803d;
+}
+
+.add-resource-form button[type="submit"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.form-error {
+  padding: 10px;
+  background: #241515;
+  border: 1px solid #4a1f1f;
+  border-radius: 6px;
+  color: #f87171;
+  font-size: 13px;
 }

@@ -267,6 +267,45 @@ db.exec(`
       AND url NOT LIKE '%cdninstagram.com%'
 `);
 
+const hasResourcePlatformColumn = sharedPostColumns.some(
+    (column) => column.name === "resource_platform"
+);
+
+if (!hasResourcePlatformColumn) {
+    db.exec(`
+        ALTER TABLE instagram_shared_posts
+        ADD COLUMN resource_platform TEXT
+    `);
+
+    console.log(
+        "Added resource_platform column to instagram_shared_posts!"
+    );
+}
+
+// Detect and backfill platform for existing resource URLs
+const { detectPlatform } = require("./utils/platformDetector");
+
+const rowsToUpdate = db
+    .prepare(
+        "SELECT id, resource_url FROM instagram_shared_posts WHERE resource_url IS NOT NULL AND resource_platform IS NULL"
+    )
+    .all();
+
+if (rowsToUpdate.length > 0) {
+    const updateStmt = db.prepare(
+        "UPDATE instagram_shared_posts SET resource_platform = ? WHERE id = ?"
+    );
+
+    for (const row of rowsToUpdate) {
+        const platform = detectPlatform(row.resource_url);
+        updateStmt.run(platform, row.id);
+    }
+
+    console.log(
+        `Backfilled resource_platform for ${rowsToUpdate.length} existing resource(s)!`
+    );
+}
+
 console.log("Database ready!");
 
 module.exports = db;

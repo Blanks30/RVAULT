@@ -18,6 +18,7 @@ function createTestDb() {
             url TEXT,
             original_url TEXT,
             resource_url TEXT,
+            resource_platform TEXT,
             sender_id TEXT,
             recipient_id TEXT,
             message_id TEXT,
@@ -106,7 +107,7 @@ test("same sender => match (matches recent CTA reel from same sender)", () => {
 
     const row = db
         .prepare(
-            "SELECT url, original_url, resource_url, action_status FROM instagram_shared_posts WHERE media_id = ?"
+            "SELECT url, original_url, resource_url, resource_platform, action_status FROM instagram_shared_posts WHERE media_id = ?"
         )
         .get("media-1");
 
@@ -120,6 +121,10 @@ test("same sender => match (matches recent CTA reel from same sender)", () => {
 
     if (row.resource_url !== "https://github.com/example/repo") {
         throw new Error("did not store received creator URL in resource_url");
+    }
+
+    if (row.resource_platform !== "Unknown") {
+        throw new Error(`expected resource_platform='Unknown' for non-social URL, got '${row.resource_platform}'`);
     }
 
     if (row.original_url !== "https://www.instagram.com/reel/ABC/") {

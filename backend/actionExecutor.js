@@ -10,6 +10,8 @@ require("dotenv").config({
 
 const META_API_VERSION = "v26.0";
 const META_GRAPH_URL = "https://graph.instagram.com";
+// The Messaging API (for sending DMs) uses graph.facebook.com, not graph.instagram.com
+const META_MESSAGING_URL = "https://graph.facebook.com";
 
 function getAccessToken() {
     const token =
@@ -40,7 +42,8 @@ function checkActionSupport(actionType) {
     const supportedActions =
         new Set([
             "NONE",
-            "COMMENT"
+            "COMMENT",
+            "DM"
         ]);
 
     if (supportedActions.has(action)) {
@@ -48,7 +51,7 @@ function checkActionSupport(actionType) {
             supported: true,
             action,
             requiresMetaExecution:
-                action === "COMMENT"
+                action === "COMMENT" || action === "DM"
         };
     }
 
@@ -211,6 +214,147 @@ async function executeInstagramComment({
     }
 }
 
+async function executeInstagramDM({
+    recipientId,
+    text
+}) {
+    if (!recipientId) {
+        return {
+            success: false,
+            status: "FAILED",
+            action: "DM",
+            message:
+                "Recipient Instagram-scoped ID (IGSID) is missing. Cannot send DM."
+        };
+    }
+
+    if (!text || !text.trim()) {
+        return {
+            success: false,
+            status: "FAILED",
+            action: "DM",
+            recipientId,
+            message:
+                "DM text is empty. Nothing to send."
+        };
+    }
+
+    // Message text limit: 1000 bytes (Meta spec)
+    const trimmedText = text.trim().slice(0, 1000);
+
+    if (isDryRunEnabled()) {
+        return {
+            success: true,
+            status: "DRY_RUN",
+            action: "DM",
+            recipientId,
+            input: trimmedText,
+            endpoint:
+                `${META_MESSAGING_URL}/${META_API_VERSION}/me/messages`,
+            method: "POST",
+            message:
+                "Dry run successful. No Instagram DM was sent."
+        };
+    }
+
+    let accessToken;
+
+    try {
+        accessToken = getAccessToken();
+    } catch (error) {
+        return {
+            success: false,
+            status: "FAILED",
+            action: "DM",
+            recipientId,
+            message: error.message
+        };
+    }
+
+    // POST https://graph.facebook.com/v26.0/me/messages?access_token=TOKEN
+    // Body: recipient={"id":"IGSID"}&message={"text":"..."}
+    const endpoint =
+        `${META_MESSAGING_URL}/${META_API_VERSION}/me/messages`;
+
+    try {
+        const body = new URLSearchParams();
+
+        body.append(
+            "recipient",
+            JSON.stringify({ id: recipientId })
+        );
+
+        body.append(
+            "message",
+            JSON.stringify({ text: trimmedText })
+        );
+
+        body.append(
+            "access_token",
+            accessToken
+        );
+
+        const response = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+                "Content-Type":
+                    "application/x-www-form-urlencoded"
+            },
+            body
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || data.error) {
+            console.error(
+                "Meta DM API error:",
+                JSON.stringify(data, null, 2)
+            );
+
+            return {
+                success: false,
+                status: "FAILED",
+                action: "DM",
+                recipientId,
+                input: trimmedText,
+                message:
+                    data?.error?.message ||
+                    "Instagram DM request failed.",
+                errorCode:
+                    data?.error?.code || null,
+                errorSubcode:
+                    data?.error?.error_subcode || null,
+                metaResponse: data
+            };
+        }
+
+        return {
+            success: true,
+            status: "EXECUTED",
+            action: "DM",
+            recipientId,
+            input: trimmedText,
+            messageId: data.message_id || null,
+            message:
+                "DM sent successfully via Instagram Messaging API."
+        };
+    } catch (error) {
+        console.error(
+            "Instagram DM request failed:",
+            error
+        );
+
+        return {
+            success: false,
+            status: "FAILED",
+            action: "DM",
+            recipientId,
+            input: trimmedText,
+            message: error.message
+        };
+    }
+}
+
 async function executeAction(
     actionPlan
 ) {
@@ -262,6 +406,15 @@ async function executeAction(
         });
     }
 
+    if (actionType === "DM") {
+        return executeInstagramDM({
+            recipientId:
+                actionPlan?.recipientId,
+            text:
+                actionPlan?.input
+        });
+    }
+
     return {
         success: false,
         status: "NOT_IMPLEMENTED",
@@ -281,5 +434,6 @@ module.exports = {
     checkActionSupport,
     executeAction,
     executeInstagramComment,
+    executeInstagramDM,
     isDryRunEnabled
 };

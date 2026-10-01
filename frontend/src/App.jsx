@@ -1,5 +1,54 @@
 import { useEffect, useState } from "react";
 
+// Human-readable labels and colour classes for action_status values
+const STATUS_META = {
+    LINK_RECEIVED: { label: "Link Received", cls: "status-link-received" },
+    EXECUTED:      { label: "Executed",      cls: "status-executed"      },
+    DRY_RUN:       { label: "Dry Run",       cls: "status-dry-run"       },
+    DM_SENT:       { label: "DM Sent",       cls: "status-dm-sent"       },
+    READY:         { label: "Ready",         cls: "status-ready"         },
+    RECEIVED:      { label: "Received",      cls: "status-received"      },
+    BLOCKED:       { label: "Blocked",       cls: "status-blocked"       },
+    FAILED:        { label: "Failed",        cls: "status-failed"        },
+    NEEDS_INPUT:   { label: "Needs Input",   cls: "status-needs-input"   },
+    NO_ACTION:     { label: "No Action",     cls: "status-no-action"     },
+};
+
+function ActionStatusBadge({ status }) {
+    if (!status || status === "NO_ACTION") return null;
+    const meta = STATUS_META[status] || { label: status, cls: "status-unknown" };
+    return <span className={`action-status-badge ${meta.cls}`}>{meta.label}</span>;
+}
+
+function ResourceLink({ url }) {
+    if (!url) return null;
+
+    // Derive a short human-readable label from the URL
+    let displayLabel = url;
+    try {
+        const u = new URL(url);
+        displayLabel = u.hostname.replace(/^www\./, "") + (u.pathname !== "/" ? u.pathname : "");
+        if (displayLabel.length > 55) displayLabel = displayLabel.slice(0, 52) + "…";
+    } catch {
+        if (url.length > 55) displayLabel = url.slice(0, 52) + "…";
+    }
+
+    return (
+        <div className="resource-link-box">
+            <span className="resource-link-label">Resource Link</span>
+            <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="resource-link-url"
+                title={url}
+            >
+                {displayLabel}
+            </a>
+        </div>
+    );
+}
+
 function App() {
     const [savedContent, setSavedContent] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -7,6 +56,10 @@ function App() {
     const [deletingId, setDeletingId] = useState(null);
     const [searchTerm, setSearchTerm] = useState("");
     const [selectedPlatform, setSelectedPlatform] = useState("All");
+    const [showAddForm, setShowAddForm] = useState(false);
+    const [newUrl, setNewUrl] = useState("");
+    const [addingResource, setAddingResource] = useState(false);
+    const [addError, setAddError] = useState(null);
 
     const fetchSavedContent = async () => {
         try {
@@ -30,7 +83,7 @@ function App() {
         }
     };
 
-    const deleteContent = async (id) => {
+    const deleteContent = async (item) => {
         const confirmed = window.confirm(
             "Are you sure you want to delete this saved content?"
         );
@@ -40,27 +93,62 @@ function App() {
         }
 
         try {
-            setDeletingId(id);
+            setDeletingId(item.id);
 
-            const response = await fetch(
-                `http://localhost:3000/saved/${id}`,
-                {
-                    method: "DELETE"
-                }
-            );
+            // Shared-only items (id = "shared-N") have no saved_content row.
+            // They must be deleted via /instagram/shared-posts/:shared_post_id.
+            // Regular items use /saved/:id.
+            let endpoint;
+            if (item.is_shared_only && item.shared_post_id) {
+                endpoint = `http://localhost:3000/instagram/shared-posts/${item.shared_post_id}`;
+            } else {
+                endpoint = `http://localhost:3000/saved/${item.id}`;
+            }
+
+            const response = await fetch(endpoint, { method: "DELETE" });
 
             if (!response.ok) {
                 throw new Error("Failed to delete content");
             }
 
             setSavedContent((currentContent) =>
-                currentContent.filter((item) => item.id !== id)
+                currentContent.filter((c) => c.id !== item.id)
             );
         } catch (err) {
             console.error(err);
             setError("Could not delete the content.");
         } finally {
             setDeletingId(null);
+        }
+    };
+
+    const handleAddResource = async (e) => {
+        e.preventDefault();
+        if (!newUrl.trim()) return;
+
+        setAddingResource(true);
+        setAddError(null);
+
+        try {
+            const response = await fetch("http://localhost:3000/api/content/save", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: newUrl.trim() })
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || "Failed to save resource");
+            }
+
+            setNewUrl("");
+            setShowAddForm(false);
+            await fetchSavedContent();
+        } catch (err) {
+            console.error(err);
+            setAddError(err.message);
+        } finally {
+            setAddingResource(false);
         }
     };
 
@@ -96,6 +184,7 @@ function App() {
 
         const searchableText = [
             item.url,
+            item.resource_url,
             item.title,
             item.media_id,
             item.cta_type,
@@ -116,6 +205,11 @@ function App() {
         (item) => item.platform === "Instagram"
     ).length;
 
+    // Count items that have a resource link attached
+    const resourceCount = savedContent.filter(
+        (item) => item.resource_url
+    ).length;
+
     return (
         <div className="app">
             <header className="header">
@@ -124,10 +218,35 @@ function App() {
                     <p>Your saved social-media content</p>
                 </div>
 
-                <button onClick={fetchSavedContent}>
-                    Refresh
-                </button>
+                <div style={{ display: "flex", gap: "12px" }}>
+                    <button onClick={() => setShowAddForm(!showAddForm)}>
+                        {showAddForm ? "Cancel" : "+ Add Resource"}
+                    </button>
+                    <button onClick={fetchSavedContent}>
+                        Refresh
+                    </button>
+                </div>
             </header>
+
+            {showAddForm && (
+                <div className="add-resource-form">
+                    <h3>Add Resource</h3>
+                    <form onSubmit={handleAddResource}>
+                        <input
+                            type="url"
+                            value={newUrl}
+                            onChange={(e) => setNewUrl(e.target.value)}
+                            placeholder="Enter resource URL (YouTube, GitHub, etc.)"
+                            required
+                            disabled={addingResource}
+                        />
+                        {addError && <div className="form-error">{addError}</div>}
+                        <button type="submit" disabled={addingResource}>
+                            {addingResource ? "Saving..." : "Save Resource"}
+                        </button>
+                    </form>
+                </div>
+            )}
 
             <main>
                 <section className="stats">
@@ -139,6 +258,11 @@ function App() {
                     <div className="stat-card">
                         <span>Instagram</span>
                         <strong>{instagramCount}</strong>
+                    </div>
+
+                    <div className="stat-card">
+                        <span>Resources Captured</span>
+                        <strong>{resourceCount}</strong>
                     </div>
                 </section>
 
@@ -220,7 +344,7 @@ function App() {
                             <div className="content-grid">
                                 {filteredContent.map((item) => (
                                     <article
-                                        className="content-card"
+                                        className={`content-card${item.resource_url ? " has-resource" : ""}`}
                                         key={item.id}
                                     >
                                         <div className="card-top">
@@ -244,12 +368,25 @@ function App() {
                                                 } Content`}
                                         </h3>
 
-                                        {item.media_type ===
-                                            "ig_reel" && (
-                                            <span className="content-type">
-                                                Instagram Reel
-                                            </span>
-                                        )}
+                                        <div className="card-badges">
+                                            {item.media_type ===
+                                                "ig_reel" && (
+                                                <span className="content-type">
+                                                    Instagram Reel
+                                                </span>
+                                            )}
+
+                                            {item.media_type ===
+                                                "ig_post" && (
+                                                <span className="content-type">
+                                                    Instagram Post
+                                                </span>
+                                            )}
+
+                                            <ActionStatusBadge
+                                                status={item.action_status}
+                                            />
+                                        </div>
 
                                         {item.cta_type &&
                                             item.cta_type !==
@@ -281,10 +418,15 @@ function App() {
                                             </div>
                                         )}
 
+                                        {/* Resource Link — the captured creator URL */}
+                                        <ResourceLink url={item.resource_url} />
+
+                                        {/* Source URL — the original Instagram post/reel */}
                                         <a
                                             href={item.url}
                                             target="_blank"
                                             rel="noopener noreferrer"
+                                            className="source-url"
                                         >
                                             {item.url}
                                         </a>
@@ -297,9 +439,7 @@ function App() {
                                             <button
                                                 className="delete-button"
                                                 onClick={() =>
-                                                    deleteContent(
-                                                        item.id
-                                                    )
+                                                    deleteContent(item)
                                                 }
                                                 disabled={
                                                     deletingId ===
