@@ -176,6 +176,29 @@ main {
   border-color: #66738d;
 }
 
+.sort-select {
+  min-width: 140px;
+  padding: 14px 17px;
+
+  border: 1px solid #303747;
+  border-radius: 11px;
+
+  outline: none;
+
+  color: #f5f7ff;
+  background: #171a22;
+
+  cursor: pointer;
+}
+
+.sort-select:hover {
+  border-color: #505b70;
+}
+
+.sort-select:focus {
+  border-color: #66738d;
+}
+
 .platform-filters {
   display: flex;
   flex-wrap: wrap;

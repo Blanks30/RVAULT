@@ -56,6 +56,8 @@ function App() {
     const [deletingId, setDeletingId] = useState(null);
     const [searchTerm, setSearchTerm] = useState("");
     const [selectedPlatform, setSelectedPlatform] = useState("All");
+    const [selectedStatus, setSelectedStatus] = useState("All");
+    const [sortBy, setSortBy] = useState("newest");
     const [showAddForm, setShowAddForm] = useState(false);
     const [newUrl, setNewUrl] = useState("");
     const [addingResource, setAddingResource] = useState(false);
@@ -74,7 +76,17 @@ function App() {
 
             const data = await response.json();
 
-            setSavedContent(data);
+            // Deduplicate by id (backend LEFT JOIN can create duplicates)
+            const seen = new Map();
+            const deduped = [];
+            for (const item of data) {
+                if (!seen.has(item.id)) {
+                    seen.set(item.id, true);
+                    deduped.push(item);
+                }
+            }
+
+            setSavedContent(deduped);
         } catch (err) {
             console.error(err);
             setError("Could not connect to RVAULT backend.");
@@ -165,6 +177,15 @@ function App() {
         "Unknown"
     ];
 
+    // Extract unique status values from savedContent
+    const statuses = ["All", ...Array.from(
+        new Set(
+            savedContent
+                .map((item) => item.action_status)
+                .filter(Boolean)
+        )
+    ).sort()];
+
     const getPlatformCount = (platform) => {
         if (platform === "All") {
             return savedContent.length;
@@ -175,12 +196,26 @@ function App() {
         ).length;
     };
 
+    const getStatusCount = (status) => {
+        if (status === "All") {
+            return savedContent.length;
+        }
+
+        return savedContent.filter(
+            (item) => item.action_status === status
+        ).length;
+    };
+
     const filteredContent = savedContent.filter((item) => {
         const platform = item.platform || "Unknown";
 
         const matchesPlatform =
             selectedPlatform === "All" ||
             platform === selectedPlatform;
+
+        const matchesStatus =
+            selectedStatus === "All" ||
+            (item.action_status && item.action_status.trim() === selectedStatus.trim());
 
         const searchableText = [
             item.url,
@@ -198,7 +233,32 @@ function App() {
             searchTerm.toLowerCase()
         );
 
-        return matchesPlatform && matchesSearch;
+        return matchesPlatform && matchesStatus && matchesSearch;
+    });
+
+    // Sort filtered content
+    const sortedContent = [...filteredContent].sort((a, b) => {
+        if (sortBy === "newest") {
+            const dateA = new Date(a.created_at || a.received_at || 0).getTime();
+            const dateB = new Date(b.created_at || b.received_at || 0).getTime();
+            return dateB - dateA;
+        }
+        if (sortBy === "oldest") {
+            const dateA = new Date(a.created_at || a.received_at || 0).getTime();
+            const dateB = new Date(b.created_at || b.received_at || 0).getTime();
+            return dateA - dateB;
+        }
+        if (sortBy === "status") {
+            const statusA = a.action_status || "";
+            const statusB = b.action_status || "";
+            return statusA.localeCompare(statusB);
+        }
+        if (sortBy === "platform") {
+            const platformA = a.platform || "Unknown";
+            const platformB = b.platform || "Unknown";
+            return platformA.localeCompare(platformB);
+        }
+        return 0;
     });
 
     const instagramCount = savedContent.filter(
@@ -272,20 +332,32 @@ function App() {
                             <h2>Saved Content</h2>
 
                             <span>
-                                {filteredContent.length} of{" "}
+                                {sortedContent.length} of{" "}
                                 {savedContent.length} items
                             </span>
                         </div>
 
-                        <input
-                            type="text"
-                            className="search-input"
-                            placeholder="Search saved content..."
-                            value={searchTerm}
-                            onChange={(event) =>
-                                setSearchTerm(event.target.value)
-                            }
-                        />
+                        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                            <input
+                                type="text"
+                                className="search-input"
+                                placeholder="Search saved content..."
+                                value={searchTerm}
+                                onChange={(event) =>
+                                    setSearchTerm(event.target.value)
+                                }
+                            />
+                            <select
+                                className="sort-select"
+                                value={sortBy}
+                                onChange={(e) => setSortBy(e.target.value)}
+                            >
+                                <option value="newest">Newest</option>
+                                <option value="oldest">Oldest</option>
+                                <option value="status">Status</option>
+                                <option value="platform">Platform</option>
+                            </select>
+                        </div>
                     </div>
 
                     <div className="platform-filters">
@@ -304,6 +376,27 @@ function App() {
                                 {platform}
                                 <span>
                                     {getPlatformCount(platform)}
+                                </span>
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="platform-filters">
+                        {statuses.map((status) => (
+                            <button
+                                key={status}
+                                className={`filter-button ${
+                                    selectedStatus === status
+                                        ? "active"
+                                        : ""
+                                }`}
+                                onClick={() =>
+                                    setSelectedStatus(status)
+                                }
+                            >
+                                {STATUS_META[status]?.label || status}
+                                <span>
+                                    {getStatusCount(status)}
                                 </span>
                             </button>
                         ))}
@@ -332,7 +425,7 @@ function App() {
                     {!loading &&
                         !error &&
                         savedContent.length > 0 &&
-                        filteredContent.length === 0 && (
+                        sortedContent.length === 0 && (
                             <div className="message">
                                 No content matches your filters.
                             </div>
@@ -340,9 +433,9 @@ function App() {
 
                     {!loading &&
                         !error &&
-                        filteredContent.length > 0 && (
+                        sortedContent.length > 0 && (
                             <div className="content-grid">
-                                {filteredContent.map((item) => (
+                                {sortedContent.map((item) => (
                                     <article
                                         className={`content-card${item.resource_url ? " has-resource" : ""}`}
                                         key={item.id}
