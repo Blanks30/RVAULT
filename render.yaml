@@ -1,0 +1,49 @@
+# ------------------------------------------------------------------------------
+# Render Blueprint Specification for RVAULT
+# Free Web Service (Backend) + Free Static Site (Frontend)
+#
+# Schema: https://render.com/schema/render.yaml.json
+# ------------------------------------------------------------------------------
+services:
+  # ── Backend Web Service (Free Tier) ─────────────────────────────────────────
+  - type: web
+    name: rvault-backend
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: node backend/server.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: API_SECRET
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: META_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: ENABLE_META_ACTIONS
+        value: "false"
+
+  # ── Frontend Static Site (Free Tier) ────────────────────────────────────────
+  - type: web
+    name: rvault-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: rvault-backend
+          envVarKey: RENDER_EXTERNAL_URL
