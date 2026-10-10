@@ -67,6 +67,19 @@ db.exec(`
       AND platform = 'Unknown'
 `);
 
+const hasCheckedColumn = savedContentColumns.some(
+    (column) => column.name === "checked"
+);
+
+if (!hasCheckedColumn) {
+    db.exec(`
+        ALTER TABLE saved_content
+        ADD COLUMN checked INTEGER NOT NULL DEFAULT 0
+    `);
+
+    console.log("Added checked column to saved_content!");
+}
+
 db.exec(`
     CREATE TABLE IF NOT EXISTS instagram_shared_posts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -10,6 +10,7 @@ require("dotenv").config({
 
 const express = require("express");
 const cors = require("cors");
+const crypto = require("crypto");
 const db = require("./database");
 const contentRoutes = require("./routes/content");
 const { detectPlatform } = require("./utils/platformDetector");
@@ -25,8 +26,107 @@ const {
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+// CORS configuration with environment-based allowed origins
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
+    : ['http://localhost:5173'];  // Default to Vite dev server
+
+app.use(cors({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (e.g., mobile apps, Postman, Meta webhooks)
+        if (!origin) {
+            return callback(null, true);
+        }
+
+        // Check if origin is in allowed list
+        if (allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error(`CORS policy: Origin ${origin} not allowed`));
+        }
+    },
+    credentials: true
+}));
+
+// For webhook verification, we need the raw body to compute HMAC
+// Use express.raw() for webhook route, express.json() for everything else
+app.use((req, res, next) => {
+    if (req.path === '/webhook' && req.method === 'POST') {
+        express.raw({ type: 'application/json' })(req, res, next);
+    } else {
+        express.json()(req, res, next);
+    }
+});
+
+// ---------------------------------------------------------------------------
+// API key authentication middleware
+// ---------------------------------------------------------------------------
+// Routes exempt from authentication:
+//   GET  /          – health check ("RVAULT is running!")
+//   GET  /webhook   – Meta webhook subscription verification (public handshake)
+//   POST /webhook   – Meta webhook delivery (protected separately by HMAC)
+//
+// All other routes require:  Authorization: Bearer <API_SECRET>
+//
+// API_SECRET must be set in the server environment (.env).  If it is missing
+// the middleware returns 503 rather than silently allowing unauthenticated
+// access, so a misconfigured deployment fails loudly.
+// ---------------------------------------------------------------------------
+function isPublicExemption(req) {
+    if (req.path === "/" && req.method === "GET") {
+        return true;
+    }
+    if (req.path === "/webhook" && (req.method === "GET" || req.method === "POST")) {
+        return true;
+    }
+    return false;
+}
+
+function requireApiKey(req, res, next) {
+    // Exempt exactly GET /, GET /webhook, and POST /webhook
+    if (isPublicExemption(req)) {
+        return next();
+    }
+
+    const secret = process.env.API_SECRET;
+
+    if (!secret) {
+        console.error(
+            "[AUTH] API_SECRET is not configured – all protected routes are blocked."
+        );
+        return res.status(503).json({
+            error: "Server is not configured for authenticated access (API_SECRET missing)"
+        });
+    }
+
+    const authHeader = req.headers["authorization"] || "";
+    const token = authHeader.startsWith("Bearer ")
+        ? authHeader.slice(7)
+        : "";
+
+    // Constant-time comparison to prevent timing attacks
+    let valid = false;
+    try {
+        const tokenBuf  = Buffer.from(token.padEnd(secret.length));
+        const secretBuf = Buffer.from(secret);
+        // timingSafeEqual requires same-length buffers
+        if (tokenBuf.length === secretBuf.length) {
+            valid = crypto.timingSafeEqual(tokenBuf, secretBuf)
+                && token.length === secret.length;
+        }
+    } catch {
+        valid = false;
+    }
+
+    if (!valid) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    next();
+}
+
+// Apply authentication globally — exemptions handled inside the middleware
+app.use(requireApiKey);
 
 function isMetaExecutionEnabled() {
     return (
@@ -62,24 +162,39 @@ app.get("/webhook", (req, res) => {
     const token = req.query["hub.verify_token"];
     const challenge = req.query["hub.challenge"];
 
-    const expectedToken = (
-        process.env.META_WEBHOOK_VERIFY_TOKEN ||
-        "RVAULT_VERIFY_2026"
-    ).trim();
+    const rawExpectedToken = process.env.META_WEBHOOK_VERIFY_TOKEN;
+    if (!rawExpectedToken || typeof rawExpectedToken !== "string" || !rawExpectedToken.trim()) {
+        console.error("[WEBHOOK SECURITY] META_WEBHOOK_VERIFY_TOKEN is not configured");
+        return res.sendStatus(403);
+    }
 
-    const receivedToken = typeof token === "string" ? token.trim() : token;
+    const expectedToken = rawExpectedToken.trim();
+    const receivedToken = typeof token === "string" ? token.trim() : "";
+
+    let tokenValid = false;
+    try {
+        const receivedBuf = Buffer.from(receivedToken);
+        const expectedBuf = Buffer.from(expectedToken);
+        if (
+            receivedBuf.length === expectedBuf.length &&
+            crypto.timingSafeEqual(receivedBuf, expectedBuf)
+        ) {
+            tokenValid = true;
+        }
+    } catch {
+        tokenValid = false;
+    }
 
     if (
         mode === "subscribe" &&
-        (receivedToken === expectedToken ||
-         receivedToken === "RVAULT_VERIFY_2026")
+        tokenValid
     ) {
         console.log("Webhook verified successfully!");
         return res.status(200).send(challenge);
     }
 
     console.warn(
-        `Webhook verification failed! Received mode="${mode}", token="${receivedToken}", expected="${expectedToken}"`
+        `Webhook verification failed! Received mode="${mode || ""}"`
     );
 
     res.sendStatus(403);
@@ -920,6 +1035,7 @@ app.get("/saved", (req, res) => {
                     sc.url,
                     sc.platform,
                     sc.created_at,
+                    sc.checked,
                     isp.media_id,
                     isp.media_type,
                     isp.title,
@@ -1107,17 +1223,74 @@ app.delete(
     }
 );
 
-app.post("/webhook", async (req, res) => {
-    console.log(
-        "Instagram webhook event received!"
-    );
+// Webhook signature verification middleware
+function verifyWebhookSignature(req, res, next) {
+    const signature = req.headers['x-hub-signature-256'];
+    const appSecret = process.env.META_APP_SECRET;
 
+    if (!appSecret) {
+        console.error('[WEBHOOK SECURITY] META_APP_SECRET not configured');
+        return res.status(500).json({
+            error: 'Webhook signature verification is not configured'
+        });
+    }
+
+    if (!signature) {
+        console.warn('[WEBHOOK SECURITY] Missing X-Hub-Signature-256 header');
+        return res.status(403).json({
+            error: 'Missing signature header'
+        });
+    }
+
+    // Compute expected signature from raw body
+    const rawBody = Buffer.isBuffer(req.body)
+        ? req.body
+        : Buffer.from(req.body || "");
+
+    const expectedHash = crypto
+        .createHmac('sha256', appSecret)
+        .update(rawBody)  // req.body is Buffer from express.raw()
+        .digest('hex');
+
+    const expectedSignature = `sha256=${expectedHash}`;
+
+    // Use constant-time comparison to prevent timing attacks
+    // Both buffers must have the same byte length for timingSafeEqual
+    const sigBuf = Buffer.from(signature);
+    const expectedBuf = Buffer.from(expectedSignature);
+
+    if (sigBuf.length !== expectedBuf.length) {
+        console.warn('[WEBHOOK SECURITY] Invalid signature');
+        return res.status(403).json({
+            error: 'Invalid signature'
+        });
+    }
+
+    const signatureValid = crypto.timingSafeEqual(sigBuf, expectedBuf);
+
+    if (!signatureValid) {
+        console.warn('[WEBHOOK SECURITY] Invalid signature');
+        return res.status(403).json({
+            error: 'Invalid signature'
+        });
+    }
+
+    // Parse JSON body after verification
+    try {
+        req.body = JSON.parse(rawBody.toString('utf8'));
+        next();
+    } catch (error) {
+        console.error('[WEBHOOK] Failed to parse JSON body:', error);
+        return res.status(400).json({
+            error: 'Invalid JSON payload'
+        });
+    }
+}
+
+app.post("/webhook", verifyWebhookSignature, async (req, res) => {
+    const entryCount = Array.isArray(req.body?.entry) ? req.body.entry.length : 0;
     console.log(
-        JSON.stringify(
-            req.body,
-            null,
-            2
-        )
+        `[WEBHOOK] Instagram webhook event received (entries: ${entryCount})`
     );
 
     try {
@@ -1216,29 +1389,38 @@ app.use(
 
 const PORT = process.env.PORT || 3000;
 
-const server = app.listen(PORT, () => {
-    console.log(
-        `RVAULT running at http://localhost:${PORT}`
-    );
-
-    console.log(
-        "Meta action execution:",
-        isMetaExecutionEnabled()
-            ? "ENABLED"
-            : "DISABLED"
-    );
-});
-
-server.on("error", (error) => {
-    if (error.code === "EADDRINUSE") {
-        console.error(
-            `\n[PORT CONFLICT] Port ${PORT} is already in use by another running process.`
+if (require.main === module) {
+    const server = app.listen(PORT, () => {
+        console.log(
+            `RVAULT running at http://localhost:${PORT}`
         );
-        console.error(
-            `To fix this, stop the existing process using port ${PORT} before restarting.\n`
+
+        console.log(
+            "Meta action execution:",
+            isMetaExecutionEnabled()
+                ? "ENABLED"
+                : "DISABLED"
         );
-    } else {
-        console.error("Server error:", error);
-    }
-    process.exit(1);
-});
+    });
+
+    server.on("error", (error) => {
+        if (error.code === "EADDRINUSE") {
+            console.error(
+                `\n[PORT CONFLICT] Port ${PORT} is already in use by another running process.`
+            );
+            console.error(
+                `To fix this, stop the existing process using port ${PORT} before restarting.\n`
+            );
+        } else {
+            console.error("Server error:", error);
+        }
+        process.exit(1);
+    });
+}
+
+module.exports = {
+    app,
+    requireApiKey,
+    verifyWebhookSignature,
+    isPublicExemption
+};

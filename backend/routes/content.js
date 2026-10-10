@@ -81,4 +81,48 @@ router.delete("/saved/:id", (req, res) => {
     });
 });
 
+router.patch("/saved/:id/toggle", (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({
+            error: "Invalid ID"
+        });
+    }
+
+    const { checked } = req.body;
+
+    if (typeof checked !== "boolean") {
+        return res.status(400).json({
+            error: "checked must be a boolean"
+        });
+    }
+
+    try {
+        const stmt = db.prepare(
+            "UPDATE saved_content SET checked = ? WHERE id = ?"
+        );
+
+        const result = stmt.run(checked ? 1 : 0, id);
+
+        if (result.changes === 0) {
+            return res.status(404).json({
+                error: "Content not found"
+            });
+        }
+
+        res.json({
+            message: "Checked state updated!",
+            id: id,
+            checked: checked
+        });
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            error: "Could not update checked state"
+        });
+    }
+});
+
 module.exports = router;

@@ -1,5 +1,8 @@
 node_modules/
 ravault.db
+*.db-wal
+*.db-shm
+backups/
 .env
 .env.*
-!.env.example  
+!.env.example

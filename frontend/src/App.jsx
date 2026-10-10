@@ -1,5 +1,39 @@
 import { useEffect, useState } from "react";
 
+// API base URL: use environment variable in production, localhost in development
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+// ---------------------------------------------------------------------------
+// API token helpers
+// The API_SECRET is stored in localStorage (key: rvault_api_token).
+// It is entered once by the user via a setup prompt and never baked into
+// the bundle.  On 401 responses the token is cleared and the prompt re-shows.
+// ---------------------------------------------------------------------------
+const TOKEN_KEY = "rvault_api_token";
+
+function getStoredToken() {
+    try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
+}
+function storeToken(t) {
+    try { localStorage.setItem(TOKEN_KEY, t); } catch { /* storage unavailable */ }
+}
+function clearToken() {
+    try { localStorage.removeItem(TOKEN_KEY); } catch { /* storage unavailable */ }
+}
+
+/** Build fetch options that always include the Authorization header. */
+function authFetch(url, options = {}) {
+    const token = getStoredToken();
+    return fetch(url, {
+        ...options,
+        headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {}),
+            ...(token ? { "Authorization": `Bearer ${token}` } : {})
+        }
+    });
+}
+
 // Human-readable labels and colour classes for action_status values
 const STATUS_META = {
     LINK_RECEIVED: { label: "Link Received", cls: "status-link-received" },
@@ -57,19 +91,46 @@ function App() {
     const [searchTerm, setSearchTerm] = useState("");
     const [selectedPlatform, setSelectedPlatform] = useState("All");
     const [selectedStatus, setSelectedStatus] = useState("All");
+    const [selectedCheckedFilter, setSelectedCheckedFilter] = useState("All");
     const [sortBy, setSortBy] = useState("newest");
     const [showAddForm, setShowAddForm] = useState(false);
     const [newUrl, setNewUrl] = useState("");
     const [addingResource, setAddingResource] = useState(false);
     const [addError, setAddError] = useState(null);
+    const [togglingId, setTogglingId] = useState(null);
+
+    // Token setup prompt state
+    const [tokenPrompt, setTokenPrompt] = useState(!getStoredToken());
+    const [tokenInput, setTokenInput] = useState("");
+
+    function handleTokenSave(e) {
+        e.preventDefault();
+        const trimmed = tokenInput.trim();
+        if (!trimmed) return;
+        storeToken(trimmed);
+        setTokenInput("");
+        setTokenPrompt(false);
+        fetchSavedContent();
+    }
+
+    function handleClearToken() {
+        clearToken();
+        setTokenPrompt(true);
+    }
 
     const fetchSavedContent = async () => {
         try {
             setLoading(true);
             setError("");
 
-            const response = await fetch("http://localhost:3000/saved");
+            const response = await authFetch(`${API_BASE_URL}/saved`);
 
+            if (response.status === 401) {
+                clearToken();
+                setTokenPrompt(true);
+                setLoading(false);
+                return;
+            }
             if (!response.ok) {
                 throw new Error("Failed to fetch saved content");
             }
@@ -112,16 +173,23 @@ function App() {
             // Regular items use /saved/:id.
             let endpoint;
             if (item.is_shared_only && item.shared_post_id) {
-                endpoint = `http://localhost:3000/instagram/shared-posts/${item.shared_post_id}`;
+                endpoint = `${API_BASE_URL}/instagram/shared-posts/${item.shared_post_id}`;
             } else {
-                endpoint = `http://localhost:3000/saved/${item.id}`;
+                endpoint = `${API_BASE_URL}/saved/${item.id}`;
             }
 
-            const response = await fetch(endpoint, { method: "DELETE" });
+            const response = await authFetch(endpoint, { method: "DELETE" });
+            if (response.status === 401) {
+                clearToken();
+                setTokenPrompt(true);
+                setDeletingId(null);
+                return;
+            }
 
             if (!response.ok) {
                 throw new Error("Failed to delete content");
             }
+
 
             setSavedContent((currentContent) =>
                 currentContent.filter((c) => c.id !== item.id)
@@ -134,6 +202,45 @@ function App() {
         }
     };
 
+    const toggleChecked = async (item) => {
+        // Shared-only items don't have checked state (no saved_content row)
+        if (item.is_shared_only) {
+            return;
+        }
+
+        const newCheckedState = !item.checked;
+
+        try {
+            setTogglingId(item.id);
+
+            const response = await authFetch(`${API_BASE_URL}/saved/${item.id}/toggle`, {
+                method: "PATCH",
+                body: JSON.stringify({ checked: newCheckedState })
+            });
+            if (response.status === 401) {
+                clearToken();
+                setTokenPrompt(true);
+                setTogglingId(null);
+                return;
+            }
+
+            if (!response.ok) {
+                throw new Error("Failed to toggle checked state");
+            }
+
+            setSavedContent((currentContent) =>
+                currentContent.map((c) =>
+                    c.id === item.id ? { ...c, checked: newCheckedState ? 1 : 0 } : c
+                )
+            );
+        } catch (err) {
+            console.error(err);
+            setError("Could not update checked state.");
+        } finally {
+            setTogglingId(null);
+        }
+    };
+
     const handleAddResource = async (e) => {
         e.preventDefault();
         if (!newUrl.trim()) return;
@@ -142,11 +249,16 @@ function App() {
         setAddError(null);
 
         try {
-            const response = await fetch("http://localhost:3000/api/content/save", {
+            const response = await authFetch(`${API_BASE_URL}/save`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ url: newUrl.trim() })
             });
+            if (response.status === 401) {
+                clearToken();
+                setTokenPrompt(true);
+                setAddingResource(false);
+                return;
+            }
 
             if (!response.ok) {
                 const data = await response.json();
@@ -217,6 +329,11 @@ function App() {
             selectedStatus === "All" ||
             (item.action_status && item.action_status.trim() === selectedStatus.trim());
 
+        const matchesChecked =
+            selectedCheckedFilter === "All" ||
+            (selectedCheckedFilter === "Unchecked" && !item.checked) ||
+            (selectedCheckedFilter === "Checked" && item.checked);
+
         const searchableText = [
             item.url,
             item.resource_url,
@@ -233,7 +350,7 @@ function App() {
             searchTerm.toLowerCase()
         );
 
-        return matchesPlatform && matchesStatus && matchesSearch;
+        return matchesPlatform && matchesStatus && matchesChecked && matchesSearch;
     });
 
     // Sort filtered content
@@ -270,6 +387,54 @@ function App() {
         (item) => item.resource_url
     ).length;
 
+    // Count unchecked items (excluding shared-only items)
+    const uncheckedCount = savedContent.filter(
+        (item) => !item.is_shared_only && !item.checked
+    ).length;
+
+    const getCheckedFilterCount = (filter) => {
+        if (filter === "All") {
+            return savedContent.length;
+        }
+        if (filter === "Unchecked") {
+            return savedContent.filter((item) => !item.is_shared_only && !item.checked).length;
+        }
+        if (filter === "Checked") {
+            return savedContent.filter((item) => !item.is_shared_only && item.checked).length;
+        }
+        return 0;
+    };
+
+    // Show token setup prompt before rendering main app
+    if (tokenPrompt) {
+        return (
+            <div className="app">
+                <div className="token-setup-overlay">
+                    <div className="token-setup-modal">
+                        <h2>RVAULT — Enter API Token</h2>
+                        <p>
+                            Enter the <strong>API_SECRET</strong> configured on the backend.
+                            It will be stored in your browser&apos;s local storage and sent
+                            on every request.
+                        </p>
+                        <form onSubmit={handleTokenSave}>
+                            <input
+                                id="rvault-token-input"
+                                type="password"
+                                value={tokenInput}
+                                onChange={(e) => setTokenInput(e.target.value)}
+                                placeholder="Paste your API token here"
+                                autoFocus
+                                required
+                            />
+                            <button type="submit">Save Token &amp; Continue</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="app">
             <header className="header">
@@ -282,6 +447,13 @@ function App() {
                     <button onClick={() => setShowAddForm(!showAddForm)}>
                         {showAddForm ? "Cancel" : "+ Add Resource"}
                     </button>
+                    <button
+                            id="rvault-clear-token"
+                            onClick={handleClearToken}
+                            style={{ fontSize: "0.75rem", opacity: 0.7 }}
+                        >
+                            Clear Token
+                        </button>
                     <button onClick={fetchSavedContent}>
                         Refresh
                     </button>
@@ -323,6 +495,11 @@ function App() {
                     <div className="stat-card">
                         <span>Resources Captured</span>
                         <strong>{resourceCount}</strong>
+                    </div>
+
+                    <div className="stat-card">
+                        <span>Unchecked Items</span>
+                        <strong>{uncheckedCount}</strong>
                     </div>
                 </section>
 
@@ -402,6 +579,27 @@ function App() {
                         ))}
                     </div>
 
+                    <div className="platform-filters">
+                        {["All", "Unchecked", "Checked"].map((filter) => (
+                            <button
+                                key={filter}
+                                className={`filter-button ${
+                                    selectedCheckedFilter === filter
+                                        ? "active"
+                                        : ""
+                                }`}
+                                onClick={() =>
+                                    setSelectedCheckedFilter(filter)
+                                }
+                            >
+                                {filter}
+                                <span>
+                                    {getCheckedFilterCount(filter)}
+                                </span>
+                            </button>
+                        ))}
+                    </div>
+
                     {loading && (
                         <div className="message">
                             Loading saved content...
@@ -440,6 +638,18 @@ function App() {
                                         className={`content-card${item.resource_url ? " has-resource" : ""}`}
                                         key={item.id}
                                     >
+                                        {!item.is_shared_only && (
+                                            <label className="checkbox-label checkbox-top">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!item.checked}
+                                                    onChange={() => toggleChecked(item)}
+                                                    disabled={togglingId === item.id}
+                                                />
+                                                <span>{item.checked ? "Checked" : "Unchecked"}</span>
+                                            </label>
+                                        )}
+
                                         <div className="card-top">
                                             <span className="platform">
                                                 {item.platform ||
