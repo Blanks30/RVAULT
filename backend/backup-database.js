@@ -24,9 +24,13 @@ const fs   = require("fs");
 const Database = require("better-sqlite3");
 
 // ── Paths ────────────────────────────────────────────────────────────────────
-const PROJECT_ROOT = path.join(__dirname, "..");
-const DB_PATH      = path.join(PROJECT_ROOT, "ravault.db");
-const BACKUPS_DIR  = path.join(PROJECT_ROOT, "backups");
+const PROJECT_ROOT    = path.join(__dirname, "..");
+const DEFAULT_DB_PATH = path.join(PROJECT_ROOT, "ravault.db");
+const configuredPath  = process.env.SQLITE_DB_PATH || process.env.DATABASE_PATH;
+const DB_PATH         = configuredPath
+    ? path.resolve(configuredPath)
+    : DEFAULT_DB_PATH;
+const BACKUPS_DIR     = path.join(PROJECT_ROOT, "backups");
 
 // ── Config ───────────────────────────────────────────────────────────────────
 const MAX_BACKUPS = 7;

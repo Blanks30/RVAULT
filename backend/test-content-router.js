@@ -1,7 +1,7 @@
 /**
  * test-content-router.js
  *
- * Integration tests for routes/content.js after Phase 1 changes:
+ * Integration tests for routes/content.js:
  *   - GET /saved is NOT served by the router (only by server.js)
  *   - POST /save correctly detects platform and inserts a row
  *   - DELETE /saved/:id correctly removes a row
@@ -9,52 +9,29 @@
  *   - DELETE /saved/:id with non-existent ID returns 404
  *   - detectPlatform in content.js now uses the shared utility (spot check)
  *
- * Uses an in-memory SQLite DB so it never touches production data.
+ * Uses an in-memory PostgreSQL DB via pg-mem so it tests real PostgreSQL behavior.
  *
  * Run: node backend/test-content-router.js
  */
 
 const express = require("express");
-const Database = require("better-sqlite3");
-
-// ---- Minimal in-memory DB setup ----
-const testDb = new Database(":memory:");
-
-testDb.exec(`
-    CREATE TABLE saved_content (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        url TEXT NOT NULL UNIQUE,
-        platform TEXT NOT NULL DEFAULT 'Unknown',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-`);
-
-testDb.exec(`
-    CREATE TABLE instagram_shared_posts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        media_id TEXT NOT NULL UNIQUE,
-        media_type TEXT NOT NULL DEFAULT 'ig_post',
-        title TEXT,
-        url TEXT,
-        original_url TEXT,
-        resource_url TEXT,
-        sender_id TEXT,
-        recipient_id TEXT,
-        message_id TEXT,
-        cta_type TEXT,
-        cta_keyword TEXT,
-        action_type TEXT,
-        action_input TEXT,
-        action_status TEXT,
-        received_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-`);
-
-// ---- Inject the test DB into the module system ----
-// We patch require cache so routes/content.js gets our in-memory DB
-const Module = require("module");
+const { newDb } = require("pg-mem");
 const path = require("path");
 
+// ---- Minimal in-memory PostgreSQL DB setup ----
+const memDb = newDb();
+const pgAdapter = memDb.adapters.createPg();
+const pool = new pgAdapter.Pool();
+
+const testDb = {
+    query: (text, params) => pool.query(text, params),
+    getClient: () => pool.connect(),
+    initDatabase: async () => {},
+    close: () => pool.end(),
+    pool
+};
+
+// ---- Inject the test DB into the module system ----
 const dbModulePath = path.resolve(__dirname, "database.js");
 require.cache[dbModulePath] = {
     id: dbModulePath,
@@ -155,17 +132,18 @@ test("POST /save - saves Unknown platform for unrecognised domain", async () => 
 // 6. DELETE /saved/:id - deletes an existing row
 test("DELETE /saved/:id - deletes an existing row", async () => {
     // Insert a fresh row directly
-    const insertResult = testDb.prepare(
-        "INSERT INTO saved_content (url, platform) VALUES (?, ?)"
-    ).run("https://www.tiktok.com/@user/video/to-delete", "TikTok");
+    const insertResult = await testDb.query(
+        "INSERT INTO saved_content (url, platform) VALUES ($1, $2) RETURNING id",
+        ["https://www.tiktok.com/@user/video/to-delete", "TikTok"]
+    );
 
-    const id = insertResult.lastInsertRowid;
+    const id = insertResult.rows[0].id;
     const res = await request("DELETE", "/saved/" + id, null);
     if (res.status !== 200) throw new Error("Expected 200, got " + res.status + " body: " + JSON.stringify(res.body));
 
     // Verify it's gone from the DB
-    const row = testDb.prepare("SELECT id FROM saved_content WHERE id = ?").get(id);
-    if (row) throw new Error("Row was not deleted from DB");
+    const check = await testDb.query("SELECT id FROM saved_content WHERE id = $1", [id]);
+    if (check.rows.length > 0) throw new Error("Row was not deleted from DB");
 });
 
 // 7. DELETE /saved/:id - returns 404 for non-existent ID
@@ -198,6 +176,34 @@ test("GET /saved via router stub returns 404 (server.js owns the real route)", a
 let failed = 0;
 
 async function runAll() {
+    await testDb.query(`
+        CREATE TABLE IF NOT EXISTS saved_content (
+            id SERIAL PRIMARY KEY,
+            url TEXT NOT NULL UNIQUE,
+            platform TEXT NOT NULL DEFAULT 'Unknown',
+            checked INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS instagram_shared_posts (
+            id SERIAL PRIMARY KEY,
+            media_id TEXT NOT NULL UNIQUE,
+            media_type TEXT NOT NULL DEFAULT 'ig_post',
+            title TEXT,
+            url TEXT,
+            original_url TEXT,
+            resource_url TEXT,
+            sender_id TEXT,
+            recipient_id TEXT,
+            message_id TEXT,
+            cta_type TEXT,
+            cta_keyword TEXT,
+            action_type TEXT,
+            action_input TEXT,
+            action_status TEXT,
+            received_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+
     for (const { name, fn } of tests) {
         try {
             await fn();

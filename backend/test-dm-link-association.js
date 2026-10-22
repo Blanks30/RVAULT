@@ -1,4 +1,6 @@
-const Database = require("better-sqlite3");
+"use strict";
+
+const { newDb } = require("pg-mem");
 const {
     associateReceivedLink,
     findMatchingSharedPost,
@@ -6,12 +8,22 @@ const {
     isMetaPlatformOrCdnUrl
 } = require("./dmLinkAssociation");
 
-function createTestDb() {
-    const db = new Database(":memory:");
+async function createTestDb() {
+    const memDb = newDb();
+    const pgAdapter = memDb.adapters.createPg();
+    const pool = new pgAdapter.Pool();
 
-    db.exec(`
+    const db = {
+        query: (text, params) => pool.query(text, params),
+        getClient: () => pool.connect(),
+        initDatabase: async () => {},
+        close: () => pool.end(),
+        pool
+    };
+
+    await db.query(`
         CREATE TABLE instagram_shared_posts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             media_id TEXT NOT NULL UNIQUE,
             media_type TEXT NOT NULL DEFAULT 'ig_post',
             title TEXT,
@@ -27,15 +39,15 @@ function createTestDb() {
             action_type TEXT,
             action_input TEXT,
             action_status TEXT,
-            received_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
+            received_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
     `);
 
     return db;
 }
 
-function insertPost(db, row) {
-    db.prepare(`
+async function insertPost(db, row) {
+    await db.query(`
         INSERT INTO instagram_shared_posts (
             media_id,
             media_type,
@@ -51,8 +63,8 @@ function insertPost(db, row) {
             action_status,
             received_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    `, [
         row.media_id,
         row.media_type || "ig_reel",
         row.title !== undefined ? row.title : "Comment VIDEO for the link",
@@ -66,16 +78,13 @@ function insertPost(db, row) {
         row.action_type !== undefined ? row.action_type : "COMMENT",
         row.action_status !== undefined ? row.action_status : "READY",
         row.received_at
-    );
+    ]);
 }
 
 function isoDaysAgo(days) {
     return new Date(
         Date.now() - days * 24 * 60 * 60 * 1000
-    )
-        .toISOString()
-        .replace("T", " ")
-        .slice(0, 19);
+    ).toISOString();
 }
 
 const tests = [];
@@ -85,10 +94,10 @@ function test(name, fn) {
 }
 
 // 1. same sender => match
-test("same sender => match (matches recent CTA reel from same sender)", () => {
-    const db = createTestDb();
+test("same sender => match (matches recent CTA reel from same sender)", async () => {
+    const db = await createTestDb();
 
-    insertPost(db, {
+    await insertPost(db, {
         media_id: "media-1",
         url: "https://www.instagram.com/reel/ABC/",
         original_url: "https://www.instagram.com/reel/ABC/",
@@ -100,16 +109,16 @@ test("same sender => match (matches recent CTA reel from same sender)", () => {
         received_at: isoDaysAgo(0)
     });
 
-    const result = associateReceivedLink(db, {
+    const result = await associateReceivedLink(db, {
         senderId: "sender-1",
         url: "https://github.com/example/repo"
     });
 
-    const row = db
-        .prepare(
-            "SELECT url, original_url, resource_url, resource_platform, action_status FROM instagram_shared_posts WHERE media_id = ?"
-        )
-        .get("media-1");
+    const check = await db.query(
+        "SELECT url, original_url, resource_url, resource_platform, action_status FROM instagram_shared_posts WHERE media_id = $1",
+        ["media-1"]
+    );
+    const row = check.rows[0];
 
     if (!result.matched) {
         throw new Error("expected a match for same sender");
@@ -137,10 +146,10 @@ test("same sender => match (matches recent CTA reel from same sender)", () => {
 });
 
 // 2. different sender => no match
-test("different sender => no match (rejects candidate from another sender)", () => {
-    const db = createTestDb();
+test("different sender => no match (rejects candidate from another sender)", async () => {
+    const db = await createTestDb();
 
-    insertPost(db, {
+    await insertPost(db, {
         media_id: "media-1",
         url: "https://www.instagram.com/reel/ABC/",
         sender_id: "sender-1",
@@ -151,7 +160,7 @@ test("different sender => no match (rejects candidate from another sender)", () 
         received_at: isoDaysAgo(0)
     });
 
-    const result = associateReceivedLink(db, {
+    const result = await associateReceivedLink(db, {
         senderId: "sender-2",
         url: "https://youtu.be/abcd"
     });
@@ -170,11 +179,11 @@ test("different sender => no match (rejects candidate from another sender)", () 
 });
 
 // 3. same recipient + safe recent conversation => match when supported by existing data
-test("same recipient + safe recent conversation => match when bot DMs the reel-sharing user", () => {
-    const db = createTestDb();
+test("same recipient + safe recent conversation => match when bot DMs the reel-sharing user", async () => {
+    const db = await createTestDb();
 
     // User "user-4589" shared a Reel to the bot "page-1059"
-    insertPost(db, {
+    await insertPost(db, {
         media_id: "media-reel-1",
         url: "https://www.instagram.com/reel/CREATOR123/",
         original_url: "https://www.instagram.com/reel/CREATOR123/",
@@ -188,7 +197,7 @@ test("same recipient + safe recent conversation => match when bot DMs the reel-s
     });
 
     // Bot "page-1059" sends automated DM with link to User "user-4589"
-    const result = associateReceivedLink(db, {
+    const result = await associateReceivedLink(db, {
         senderId: "page-1059",
         recipientId: "user-4589",
         url: "https://resource.example.com/guide.pdf"
@@ -202,9 +211,11 @@ test("same recipient + safe recent conversation => match when bot DMs the reel-s
         throw new Error(`expected media-reel-1, got ${result.mediaId}`);
     }
 
-    const row = db
-        .prepare("SELECT resource_url, action_status FROM instagram_shared_posts WHERE media_id = ?")
-        .get("media-reel-1");
+    const check = await db.query(
+        "SELECT resource_url, action_status FROM instagram_shared_posts WHERE media_id = $1",
+        ["media-reel-1"]
+    );
+    const row = check.rows[0];
 
     if (row.resource_url !== "https://resource.example.com/guide.pdf") {
         throw new Error("did not associate resource_url on matching recipient");
@@ -215,11 +226,11 @@ test("same recipient + safe recent conversation => match when bot DMs the reel-s
     }
 });
 
-test("same recipient check rejects if DM was sent to a different user", () => {
-    const db = createTestDb();
+test("same recipient check rejects if DM was sent to a different user", async () => {
+    const db = await createTestDb();
 
     // User A shared a Reel
-    insertPost(db, {
+    await insertPost(db, {
         media_id: "media-user-a",
         url: "https://www.instagram.com/reel/AAA/",
         sender_id: "user-A",
@@ -230,7 +241,7 @@ test("same recipient check rejects if DM was sent to a different user", () => {
     });
 
     // Bot sends DM with link to User B (not User A)
-    const result = associateReceivedLink(db, {
+    const result = await associateReceivedLink(db, {
         senderId: "page-1059",
         recipientId: "user-B",
         url: "https://resource.example.com/other.pdf"
@@ -242,10 +253,10 @@ test("same recipient check rejects if DM was sent to a different user", () => {
 });
 
 // 4. no identity => no match
-test("no identity => no match (rejects if senderId and recipientId are missing)", () => {
-    const db = createTestDb();
+test("no identity => no match (rejects if senderId and recipientId are missing)", async () => {
+    const db = await createTestDb();
 
-    insertPost(db, {
+    await insertPost(db, {
         media_id: "media-1",
         url: "https://www.instagram.com/reel/ABC/",
         sender_id: "sender-1",
@@ -256,7 +267,7 @@ test("no identity => no match (rejects if senderId and recipientId are missing)"
         received_at: isoDaysAgo(0)
     });
 
-    const result = associateReceivedLink(db, {
+    const result = await associateReceivedLink(db, {
         senderId: null,
         recipientId: null,
         url: "https://youtu.be/abcd"
@@ -272,10 +283,10 @@ test("no identity => no match (rejects if senderId and recipientId are missing)"
 });
 
 // 5. expired/old Reel => no match
-test("expired/old Reel => no match (does not match posts older than window)", () => {
-    const db = createTestDb();
+test("expired/old Reel => no match (does not match posts older than window)", async () => {
+    const db = await createTestDb();
 
-    insertPost(db, {
+    await insertPost(db, {
         media_id: "media-old",
         url: "https://www.instagram.com/reel/OLD/",
         sender_id: "sender-1",
@@ -286,7 +297,7 @@ test("expired/old Reel => no match (does not match posts older than window)", ()
         received_at: isoDaysAgo(10)
     });
 
-    const result = associateReceivedLink(db, {
+    const result = await associateReceivedLink(db, {
         senderId: "sender-1",
         url: "https://github.com/example/repo"
     });
@@ -301,10 +312,10 @@ test("expired/old Reel => no match (does not match posts older than window)", ()
 });
 
 // 6. existing resource_url => do not overwrite unless explicitly allowed
-test("existing resource_url => do not overwrite (preserves existing resource_url)", () => {
-    const db = createTestDb();
+test("existing resource_url => do not overwrite (preserves existing resource_url)", async () => {
+    const db = await createTestDb();
 
-    insertPost(db, {
+    await insertPost(db, {
         media_id: "media-1",
         url: "https://www.instagram.com/reel/ABC/",
         original_url: "https://www.instagram.com/reel/ABC/",
@@ -317,16 +328,16 @@ test("existing resource_url => do not overwrite (preserves existing resource_url
         received_at: isoDaysAgo(0)
     });
 
-    const result = associateReceivedLink(db, {
+    const result = await associateReceivedLink(db, {
         senderId: "sender-1",
         url: "https://github.com/other"
     });
 
-    const row = db
-        .prepare(
-            "SELECT url, original_url, resource_url FROM instagram_shared_posts WHERE media_id = ?"
-        )
-        .get("media-1");
+    const check = await db.query(
+        "SELECT url, original_url, resource_url FROM instagram_shared_posts WHERE media_id = $1",
+        ["media-1"]
+    );
+    const row = check.rows[0];
 
     if (result.matched) {
         throw new Error("overwrote an existing external URL");
@@ -337,10 +348,10 @@ test("existing resource_url => do not overwrite (preserves existing resource_url
     }
 });
 
-test("skips NO_ACTION posts and uses the latest CTA post", () => {
-    const db = createTestDb();
+test("skips NO_ACTION posts and uses the latest CTA post", async () => {
+    const db = await createTestDb();
 
-    insertPost(db, {
+    await insertPost(db, {
         media_id: "media-cta",
         url: "https://www.instagram.com/reel/CTA/",
         sender_id: "sender-1",
@@ -351,7 +362,7 @@ test("skips NO_ACTION posts and uses the latest CTA post", () => {
         received_at: isoDaysAgo(1)
     });
 
-    insertPost(db, {
+    await insertPost(db, {
         media_id: "media-none",
         url: "https://www.instagram.com/reel/NONE/",
         sender_id: "sender-1",
@@ -362,7 +373,7 @@ test("skips NO_ACTION posts and uses the latest CTA post", () => {
         received_at: isoDaysAgo(0)
     });
 
-    const result = associateReceivedLink(db, {
+    const result = await associateReceivedLink(db, {
         senderId: "sender-1",
         url: "https://example.com/tool"
     });
@@ -372,10 +383,10 @@ test("skips NO_ACTION posts and uses the latest CTA post", () => {
     }
 });
 
-test("does not treat an Instagram or Meta CDN URL as the received resource link", () => {
-    const db = createTestDb();
+test("does not treat an Instagram or Meta CDN URL as the received resource link", async () => {
+    const db = await createTestDb();
 
-    insertPost(db, {
+    await insertPost(db, {
         media_id: "media-1",
         url: "https://www.instagram.com/reel/ABC/",
         sender_id: "sender-1",
@@ -386,7 +397,7 @@ test("does not treat an Instagram or Meta CDN URL as the received resource link"
         received_at: isoDaysAgo(0)
     });
 
-    const resultIg = associateReceivedLink(db, {
+    const resultIg = await associateReceivedLink(db, {
         senderId: "sender-1",
         url: "https://www.instagram.com/reel/OTHER/"
     });
@@ -395,7 +406,7 @@ test("does not treat an Instagram or Meta CDN URL as the received resource link"
         throw new Error("associated an Instagram URL");
     }
 
-    const resultCdn = associateReceivedLink(db, {
+    const resultCdn = await associateReceivedLink(db, {
         senderId: "sender-1",
         url: "https://lookaside.fbsbx.com/ig_messaging_cdn_entrance/?mid=123"
     });
@@ -405,10 +416,10 @@ test("does not treat an Instagram or Meta CDN URL as the received resource link"
     }
 });
 
-test("prefers the most recent qualifying shared post", () => {
-    const db = createTestDb();
+test("prefers the most recent qualifying shared post", async () => {
+    const db = await createTestDb();
 
-    insertPost(db, {
+    await insertPost(db, {
         media_id: "media-older",
         url: "https://www.instagram.com/reel/OLD/",
         sender_id: "sender-1",
@@ -419,7 +430,7 @@ test("prefers the most recent qualifying shared post", () => {
         received_at: isoDaysAgo(2)
     });
 
-    insertPost(db, {
+    await insertPost(db, {
         media_id: "media-newer",
         url: "https://www.instagram.com/reel/NEW/",
         sender_id: "sender-1",
@@ -430,7 +441,7 @@ test("prefers the most recent qualifying shared post", () => {
         received_at: isoDaysAgo(0)
     });
 
-    const match = findMatchingSharedPost(db, {
+    const { post: match } = await findMatchingSharedPost(db, {
         senderId: "sender-1"
     });
 
@@ -439,21 +450,25 @@ test("prefers the most recent qualifying shared post", () => {
     }
 });
 
-let failed = 0;
+async function runAll() {
+    let failed = 0;
 
-for (const { name, fn } of tests) {
-    try {
-        fn();
-        console.log("PASS:", name);
-    } catch (error) {
-        failed += 1;
-        console.error("FAIL:", name);
-        console.error(error.message);
+    for (const { name, fn } of tests) {
+        try {
+            await fn();
+            console.log("PASS:", name);
+        } catch (error) {
+            failed += 1;
+            console.error("FAIL:", name);
+            console.error(error.message);
+        }
     }
+
+    if (failed > 0) {
+        process.exit(1);
+    }
+
+    console.log("\nAll DM URL association tests passed.");
 }
 
-if (failed > 0) {
-    process.exit(1);
-}
-
-console.log("\nAll DM URL association tests passed.");
+runAll();

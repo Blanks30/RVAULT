@@ -4,7 +4,7 @@ const { detectPlatform } = require("../utils/platformDetector");
 
 const router = express.Router();
 
-router.post("/save", (req, res) => {
+router.post("/save", async (req, res) => {
     const { url } = req.body;
 
     if (!url) {
@@ -16,20 +16,19 @@ router.post("/save", (req, res) => {
     const platform = detectPlatform(url);
 
     try {
-        const stmt = db.prepare(
-            "INSERT INTO saved_content (url, platform) VALUES (?, ?)"
+        const result = await db.query(
+            "INSERT INTO saved_content (url, platform) VALUES ($1, $2) RETURNING id, url, platform",
+            [url, platform]
         );
-
-        const result = stmt.run(url, platform);
 
         res.json({
             message: "Content saved!",
-            id: result.lastInsertRowid,
+            id: result.rows[0].id,
             url: url,
             platform: platform
         });
     } catch (error) {
-        if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+        if (error.code === "23505") {
             return res.status(409).json({
                 error: "This URL is already saved!"
             });
@@ -54,7 +53,7 @@ router.get("/saved", (req, res) => {
     res.status(404).json({ error: "Not implemented here — see server.js GET /saved" });
 });
 
-router.delete("/saved/:id", (req, res) => {
+router.delete("/saved/:id", async (req, res) => {
     const id = Number(req.params.id);
 
     if (!Number.isInteger(id) || id <= 0) {
@@ -63,25 +62,31 @@ router.delete("/saved/:id", (req, res) => {
         });
     }
 
-    const stmt = db.prepare(
-        "DELETE FROM saved_content WHERE id = ?"
-    );
+    try {
+        const result = await db.query(
+            "DELETE FROM saved_content WHERE id = $1",
+            [id]
+        );
 
-    const result = stmt.run(id);
+        if (result.rowCount === 0) {
+            return res.status(404).json({
+                error: "Content not found"
+            });
+        }
 
-    if (result.changes === 0) {
-        return res.status(404).json({
-            error: "Content not found"
+        res.json({
+            message: "Content deleted!",
+            id: id
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({
+            error: "Could not delete content"
         });
     }
-
-    res.json({
-        message: "Content deleted!",
-        id: id
-    });
 });
 
-router.patch("/saved/:id/toggle", (req, res) => {
+router.patch("/saved/:id/toggle", async (req, res) => {
     const id = Number(req.params.id);
 
     if (!Number.isInteger(id) || id <= 0) {
@@ -99,13 +104,12 @@ router.patch("/saved/:id/toggle", (req, res) => {
     }
 
     try {
-        const stmt = db.prepare(
-            "UPDATE saved_content SET checked = ? WHERE id = ?"
+        const result = await db.query(
+            "UPDATE saved_content SET checked = $1 WHERE id = $2 RETURNING id, checked",
+            [checked ? 1 : 0, id]
         );
 
-        const result = stmt.run(checked ? 1 : 0, id);
-
-        if (result.changes === 0) {
+        if (result.rowCount === 0) {
             return res.status(404).json({
                 error: "Content not found"
             });

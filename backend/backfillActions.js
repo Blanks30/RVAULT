@@ -1,45 +1,65 @@
+"use strict";
+
 const db = require("./database");
 const { planAction } = require("./actionPlanner");
 
-const rows = db.prepare(`
-    SELECT
-        id,
-        cta_type,
-        cta_keyword
-    FROM instagram_shared_posts
-`).all();
+async function backfillActions() {
+    const result = await db.query(`
+        SELECT
+            id,
+            cta_type,
+            cta_keyword
+        FROM instagram_shared_posts
+    `);
+    const rows = result.rows;
 
-const update = db.prepare(`
-    UPDATE instagram_shared_posts
-    SET
-        action_type = ?,
-        action_input = ?,
-        action_status = ?
-    WHERE id = ?
-`);
+    const client = await db.getClient();
+    try {
+        await client.query("BEGIN");
 
-const updateMany = db.transaction((posts) => {
-    for (const post of posts) {
-        const plan = planAction(
-            post.cta_type,
-            post.cta_keyword
-        );
+        for (const post of rows) {
+            const plan = planAction(
+                post.cta_type,
+                post.cta_keyword
+            );
 
-        update.run(
-            plan.action,
-            plan.input,
-            plan.status,
-            post.id
-        );
+            await client.query(
+                `
+                UPDATE instagram_shared_posts
+                SET
+                    action_type = $1,
+                    action_input = $2,
+                    action_status = $3
+                WHERE id = $4
+                `,
+                [
+                    plan.action,
+                    plan.input,
+                    plan.status,
+                    post.id
+                ]
+            );
 
-        console.log(
-            `ID ${post.id}: ${post.cta_type || "NO_ACTION"} + ${post.cta_keyword || "-"} -> ${plan.action} + ${plan.input || "-"} + ${plan.status}`
-        );
+            console.log(
+                `ID ${post.id}: ${post.cta_type || "NO_ACTION"} + ${post.cta_keyword || "-"} -> ${plan.action} + ${plan.input || "-"} + ${plan.status}`
+            );
+        }
+
+        await client.query("COMMIT");
+        console.log(`Updated ${rows.length} Instagram shared posts.`);
+    } catch (err) {
+        await client.query("ROLLBACK");
+        console.error("Backfill failed, rolled back:", err);
+        throw err;
+    } finally {
+        client.release();
     }
-});
+}
 
-updateMany(rows);
+if (require.main === module) {
+    backfillActions()
+        .then(() => process.exit(0))
+        .catch(() => process.exit(1));
+}
 
-console.log(
-    `Updated ${rows.length} Instagram shared posts.`
-);
+module.exports = { backfillActions };

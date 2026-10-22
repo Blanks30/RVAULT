@@ -24,40 +24,22 @@ const http     = require("http");
 const crypto   = require("crypto");
 const express  = require("express");
 const cors     = require("cors");
-const Database = require("better-sqlite3");
+const { newDb } = require("pg-mem");
 
 // ---------------------------------------------------------------------------
-// In-memory DB (mirrors the minimal schema needed by content routes)
+// In-memory PostgreSQL DB (mirrors the schema needed by content routes)
 // ---------------------------------------------------------------------------
-const testDb = new Database(":memory:");
-testDb.exec(`
-    CREATE TABLE saved_content (
-        id       INTEGER PRIMARY KEY AUTOINCREMENT,
-        url      TEXT NOT NULL UNIQUE,
-        platform TEXT NOT NULL DEFAULT 'Unknown',
-        checked  INTEGER NOT NULL DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE instagram_shared_posts (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        media_id    TEXT NOT NULL UNIQUE,
-        media_type  TEXT NOT NULL DEFAULT 'ig_post',
-        title       TEXT,
-        url         TEXT,
-        original_url TEXT,
-        resource_url TEXT,
-        resource_platform TEXT,
-        sender_id   TEXT,
-        recipient_id TEXT,
-        message_id  TEXT,
-        cta_type    TEXT,
-        cta_keyword TEXT,
-        action_type TEXT,
-        action_input TEXT,
-        action_status TEXT,
-        received_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-`);
+const memDb = newDb();
+const pgAdapter = memDb.adapters.createPg();
+const pool = new pgAdapter.Pool();
+
+const testDb = {
+    query: (text, params) => pool.query(text, params),
+    getClient: () => pool.connect(),
+    initDatabase: async () => {},
+    close: () => pool.end(),
+    pool
+};
 
 // Inject testDb so content routes and server pick it up
 const dbPath = require("path").resolve(__dirname, "database.js");
@@ -131,25 +113,25 @@ function buildApp(apiSecret) {
     );
 
     // The real GET /saved lives in server.js; replicate minimally
-    app.get("/saved", (_req, res) => {
-        const rows = testDb.prepare(
+    app.get("/saved", async (_req, res) => {
+        const result = await testDb.query(
             "SELECT id, url, platform, checked, created_at FROM saved_content ORDER BY id DESC"
-        ).all();
-        res.json(rows);
+        );
+        res.json(result.rows);
     });
 
-    app.get("/instagram/shared-posts", (_req, res) => {
-        const rows = testDb.prepare(
+    app.get("/instagram/shared-posts", async (_req, res) => {
+        const result = await testDb.query(
             "SELECT id, media_id FROM instagram_shared_posts ORDER BY id DESC"
-        ).all();
-        res.json(rows);
+        );
+        res.json(result.rows);
     });
 
-    app.delete("/instagram/shared-posts/:id", (req, res) => {
+    app.delete("/instagram/shared-posts/:id", async (req, res) => {
         const id = Number(req.params.id);
         if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid ID" });
-        const result = testDb.prepare("DELETE FROM instagram_shared_posts WHERE id = ?").run(id);
-        if (result.changes === 0) return res.status(404).json({ error: "Not found" });
+        const result = await testDb.query("DELETE FROM instagram_shared_posts WHERE id = $1", [id]);
+        if (result.rowCount === 0) return res.status(404).json({ error: "Not found" });
         res.json({ message: "deleted", id });
     });
 
@@ -230,6 +212,35 @@ function assertEqual(actual, expected, label) {
 
 async function runAll() {
     console.log("\n=== RVAULT Auth Middleware Tests ===\n");
+
+    await testDb.query(`
+        CREATE TABLE IF NOT EXISTS saved_content (
+            id       SERIAL PRIMARY KEY,
+            url      TEXT NOT NULL UNIQUE,
+            platform TEXT NOT NULL DEFAULT 'Unknown',
+            checked  INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS instagram_shared_posts (
+            id          SERIAL PRIMARY KEY,
+            media_id    TEXT NOT NULL UNIQUE,
+            media_type  TEXT NOT NULL DEFAULT 'ig_post',
+            title       TEXT,
+            url         TEXT,
+            original_url TEXT,
+            resource_url TEXT,
+            resource_platform TEXT,
+            sender_id   TEXT,
+            recipient_id TEXT,
+            message_id  TEXT,
+            cta_type    TEXT,
+            cta_keyword TEXT,
+            action_type TEXT,
+            action_input TEXT,
+            action_status TEXT,
+            received_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
 
     // ── Group 1: Exempt routes (no token needed) ─────────────────────────
     console.log("── Exempt routes (no Authorization required) ──");

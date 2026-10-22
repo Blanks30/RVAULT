@@ -1,66 +1,85 @@
+"use strict";
+
 const assert = require("assert");
-const Database = require("better-sqlite3");
+const { newDb } = require("pg-mem");
 
-const db = new Database(":memory:");
+async function runTests() {
+    const memDb = newDb();
+    const pgAdapter = memDb.adapters.createPg();
+    const client = new pgAdapter.Client();
+    await client.connect();
 
-db.exec(`
-CREATE TABLE instagram_shared_posts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    media_id TEXT UNIQUE NOT NULL
-);
+    await client.query(`
+        CREATE TABLE instagram_shared_posts (
+            id SERIAL PRIMARY KEY,
+            media_id TEXT UNIQUE NOT NULL
+        );
 
-CREATE TABLE saved_content (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    url TEXT UNIQUE NOT NULL
-);
-`);
+        CREATE TABLE saved_content (
+            id SERIAL PRIMARY KEY,
+            url TEXT UNIQUE NOT NULL
+        );
+    `);
 
-console.log("Testing duplicate media_id...");
+    console.log("Testing duplicate media_id...");
 
-db.prepare(
-    "INSERT INTO instagram_shared_posts (media_id) VALUES (?)"
-).run("TEST_MEDIA_001");
+    await client.query(
+        "INSERT INTO instagram_shared_posts (media_id) VALUES ($1)",
+        ["TEST_MEDIA_001"]
+    );
 
-assert.throws(() => {
-    db.prepare(
-        "INSERT INTO instagram_shared_posts (media_id) VALUES (?)"
-    ).run("TEST_MEDIA_001");
+    let caughtMediaDuplicate = false;
+    try {
+        await client.query(
+            "INSERT INTO instagram_shared_posts (media_id) VALUES ($1)",
+            ["TEST_MEDIA_001"]
+        );
+    } catch (err) {
+        caughtMediaDuplicate = true;
+        assert.strictEqual(err.code, "23505", "PostgreSQL duplicate error code should be 23505");
+    }
+
+    assert(caughtMediaDuplicate, "Duplicate media_id was not rejected");
+    console.log("PASS: duplicate media_id rejected (error code 23505)");
+
+    console.log("Testing duplicate URL...");
+
+    await client.query(
+        "INSERT INTO saved_content (url) VALUES ($1)",
+        ["https://example.com/resource"]
+    );
+
+    let caughtUrlDuplicate = false;
+    try {
+        await client.query(
+            "INSERT INTO saved_content (url) VALUES ($1)",
+            ["https://example.com/resource"]
+        );
+    } catch (err) {
+        caughtUrlDuplicate = true;
+        assert.strictEqual(err.code, "23505", "PostgreSQL duplicate error code should be 23505");
+    }
+
+    assert(caughtUrlDuplicate, "Duplicate URL was not rejected");
+    console.log("PASS: duplicate URL rejected (error code 23505)");
+
+    console.log("Testing migration-style idempotency...");
+
+    await client.query(`
+        ALTER TABLE saved_content ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'Unknown';
+    `);
+
+    await client.query(`
+        ALTER TABLE saved_content ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'Unknown';
+    `);
+
+    console.log("PASS: repeated migration-style operation succeeded");
+
+    await client.end();
+    console.log("\nDatabase integrity tests passed.");
+}
+
+runTests().catch((err) => {
+    console.error("Test failed:", err);
+    process.exit(1);
 });
-
-console.log("PASS: duplicate media_id rejected");
-
-console.log("Testing duplicate URL...");
-
-db.prepare(
-    "INSERT INTO saved_content (url) VALUES (?)"
-).run("https://example.com/resource");
-
-assert.throws(() => {
-    db.prepare(
-        "INSERT INTO saved_content (url) VALUES (?)"
-    ).run("https://example.com/resource");
-});
-
-console.log("PASS: duplicate URL rejected");
-
-console.log("Testing migration-style idempotency...");
-
-db.exec(`
-CREATE TABLE IF NOT EXISTS migration_test (
-    id INTEGER PRIMARY KEY,
-    value TEXT
-);
-`);
-
-db.exec(`
-CREATE TABLE IF NOT EXISTS migration_test (
-    id INTEGER PRIMARY KEY,
-    value TEXT
-);
-`);
-
-console.log("PASS: repeated migration-style operation succeeded");
-
-db.close();
-
-console.log("\nDatabase integrity tests passed.");

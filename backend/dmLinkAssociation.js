@@ -90,9 +90,14 @@ function isWithinMatchWindow(receivedAt, now, windowDays) {
         return false;
     }
 
-    const receivedMs = Date.parse(
-        String(receivedAt).replace(" ", "T")
-    );
+    let receivedMs;
+    if (receivedAt instanceof Date) {
+        receivedMs = receivedAt.getTime();
+    } else {
+        receivedMs = Date.parse(
+            String(receivedAt).replace(" ", "T")
+        );
+    }
 
     if (Number.isNaN(receivedMs)) {
         return false;
@@ -105,7 +110,7 @@ function isWithinMatchWindow(receivedAt, now, windowDays) {
     return receivedMs >= cutoffMs;
 }
 
-function findMatchingSharedPost(
+async function findMatchingSharedPost(
     db,
     {
         senderId,
@@ -129,7 +134,7 @@ function findMatchingSharedPost(
     }
 
     // Inspect recent shared posts ordered by newest first
-    const rows = db.prepare(`
+    const result = await db.query(`
         SELECT
             id,
             media_id,
@@ -144,9 +149,10 @@ function findMatchingSharedPost(
             action_status,
             received_at
         FROM instagram_shared_posts
-        ORDER BY datetime(received_at) DESC, id DESC
+        ORDER BY received_at DESC, id DESC
         LIMIT 25
-    `).all();
+    `);
+    const rows = result.rows;
 
     diagnostics.candidatesEvaluated = rows.length;
 
@@ -232,7 +238,7 @@ function findMatchingSharedPost(
     return { post: null, diagnostics };
 }
 
-function associateReceivedLink(
+async function associateReceivedLink(
     db,
     {
         senderId,
@@ -276,7 +282,7 @@ function associateReceivedLink(
         };
     }
 
-    const { post, diagnostics } = findMatchingSharedPost(db, {
+    const { post, diagnostics } = await findMatchingSharedPost(db, {
         senderId,
         recipientId,
         now,
@@ -298,10 +304,10 @@ function associateReceivedLink(
     const { detectPlatform } = require("./utils/platformDetector");
     const resourcePlatform = detectPlatform(cleaned);
 
-    db.prepare(`
+    await db.query(`
         UPDATE instagram_shared_posts
-        SET resource_url = ?,
-            resource_platform = ?,
+        SET resource_url = $1,
+            resource_platform = $2,
             action_status = 'LINK_RECEIVED',
             original_url = COALESCE(
                 original_url,
@@ -311,8 +317,8 @@ function associateReceivedLink(
                     ELSE NULL
                 END
             )
-        WHERE id = ?
-    `).run(cleaned, resourcePlatform, post.id);
+        WHERE id = $3
+    `, [cleaned, resourcePlatform, post.id]);
 
     return {
         matched: true,

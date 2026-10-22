@@ -219,22 +219,18 @@ function extractUrls(text) {
 // detectPlatform is imported from ./utils/platformDetector
 // (removed local copy to avoid divergence)
 
-function saveUrl(url) {
+async function saveUrl(url) {
     const platform =
         detectPlatform(url);
 
     try {
-        const stmt = db.prepare(
+        await db.query(
             `
             INSERT INTO saved_content
                 (url, platform)
-            VALUES (?, ?)
-            `
-        );
-
-        stmt.run(
-            url,
-            platform
+            VALUES ($1, $2)
+            `,
+            [url, platform]
         );
 
         console.log(
@@ -248,8 +244,7 @@ function saveUrl(url) {
         );
     } catch (error) {
         if (
-            error.code ===
-            "SQLITE_CONSTRAINT_UNIQUE"
+            error.code === "23505"
         ) {
             console.log(
                 "URL already saved:",
@@ -264,7 +259,7 @@ function saveUrl(url) {
     }
 }
 
-function saveInstagramSharedMedia({
+async function saveInstagramSharedMedia({
     mediaId,
     mediaType,
     title,
@@ -287,7 +282,7 @@ function saveInstagramSharedMedia({
     }
 
     try {
-        const stmt = db.prepare(`
+        await db.query(`
             INSERT INTO instagram_shared_posts (
                 media_id,
                 media_type,
@@ -303,30 +298,28 @@ function saveInstagramSharedMedia({
                 action_input,
                 action_status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             ON CONFLICT(media_id) DO UPDATE SET
-                media_type = excluded.media_type,
-                title = excluded.title,
+                media_type = EXCLUDED.media_type,
+                title = EXCLUDED.title,
                 url = COALESCE(
-                    excluded.url,
+                    EXCLUDED.url,
                     instagram_shared_posts.url
                 ),
                 original_url = COALESCE(
-                    excluded.original_url,
+                    EXCLUDED.original_url,
                     instagram_shared_posts.original_url,
                     instagram_shared_posts.url
                 ),
-                sender_id = excluded.sender_id,
-                recipient_id = excluded.recipient_id,
-                message_id = excluded.message_id,
-                cta_type = excluded.cta_type,
-                cta_keyword = excluded.cta_keyword,
-                action_type = excluded.action_type,
-                action_input = excluded.action_input,
-                action_status = excluded.action_status
-        `);
-
-        stmt.run(
+                sender_id = EXCLUDED.sender_id,
+                recipient_id = EXCLUDED.recipient_id,
+                message_id = EXCLUDED.message_id,
+                cta_type = EXCLUDED.cta_type,
+                cta_keyword = EXCLUDED.cta_keyword,
+                action_type = EXCLUDED.action_type,
+                action_input = EXCLUDED.action_input,
+                action_status = EXCLUDED.action_status
+        `, [
             mediaId,
             mediaType,
             title || null,
@@ -339,9 +332,8 @@ function saveInstagramSharedMedia({
             ctaKeyword || null,
             actionType || "NONE",
             actionInput || null,
-            actionStatus ||
-                "NO_ACTION"
-        );
+            actionStatus || "NO_ACTION"
+        ]);
 
         console.log(
             "Instagram shared media saved!"
@@ -634,7 +626,7 @@ async function processInstagramAttachments(
             )
         );
 
-        saveInstagramSharedMedia({
+        await saveInstagramSharedMedia({
             mediaId,
             mediaType,
             title,
@@ -664,11 +656,11 @@ async function processInstagramAttachments(
         });
 
         if (url) {
-            saveUrl(url);
+            await saveUrl(url);
         }
     }
 }
-function saveInstagramReplyLink({
+async function saveInstagramReplyLink({
     mediaId,
     url,
     commentId,
@@ -680,7 +672,7 @@ function saveInstagramReplyLink({
 
     const cleanUrl = url.replace(/[),.!?]+$/g, "");
 
-    saveUrl(cleanUrl);
+    await saveUrl(cleanUrl);
 
     if (!mediaId) {
         console.log(
@@ -695,9 +687,9 @@ function saveInstagramReplyLink({
     }
 
     try {
-        const stmt = db.prepare(`
+        const result = await db.query(`
             UPDATE instagram_shared_posts
-            SET resource_url = ?,
+            SET resource_url = $1,
                 action_status = CASE
                     WHEN action_status IN (
                         'DRY_RUN',
@@ -708,13 +700,8 @@ function saveInstagramReplyLink({
                     THEN 'LINK_RECEIVED'
                     ELSE action_status
                 END
-            WHERE media_id = ?
-        `);
-
-        const result = stmt.run(
-            cleanUrl,
-            mediaId
-        );
+            WHERE media_id = $2
+        `, [cleanUrl, mediaId]);
 
         console.log(
             "Instagram reply URL received!"
@@ -742,7 +729,7 @@ function saveInstagramReplyLink({
 
         console.log(
             "Matched shared post:",
-            result.changes > 0 ? "YES" : "NO"
+            result.rowCount > 0 ? "YES" : "NO"
         );
     } catch (error) {
         console.error(
@@ -821,7 +808,7 @@ async function processInstagramCommentWebhook(changeValue) {
     }
 
     for (const url of urls) {
-        saveInstagramReplyLink({
+        await saveInstagramReplyLink({
             mediaId,
             url,
             commentId,
@@ -968,7 +955,7 @@ async function processMessage(
             }
 
             // Save actual creator/resource URL into the existing saved-content system
-            saveUrl(cleanUrl);
+            await saveUrl(cleanUrl);
 
             console.log(
                 "Attempting to match received URL to recent shared Instagram post..."
@@ -977,7 +964,7 @@ async function processMessage(
             console.log("Incoming DM Recipient ID:", recipientId || "(none)");
 
             const match =
-                associateReceivedLink(
+                await associateReceivedLink(
                     db,
                     {
                         senderId,
@@ -1026,67 +1013,71 @@ async function processMessage(
     }
 }
 
-app.get("/saved", (req, res) => {
+app.get("/saved", async (req, res) => {
     try {
-        const savedRows =
-            db.prepare(`
-                SELECT
-                    sc.id,
-                    sc.url,
-                    sc.platform,
-                    sc.created_at,
-                    sc.checked,
-                    isp.media_id,
-                    isp.media_type,
-                    isp.title,
-                    isp.cta_type,
-                    isp.cta_keyword,
-                    isp.action_type,
-                    isp.action_input,
-                    isp.action_status,
-                    isp.sender_id,
-                    isp.message_id,
-                    isp.received_at,
-                    COALESCE(isp.original_url, isp.url) AS original_url,
-                    isp.resource_url,
-                    isp.resource_platform,
-                    0 AS is_shared_only,
-                    NULL AS shared_post_id
-                FROM saved_content sc
-                LEFT JOIN instagram_shared_posts isp
-                    ON sc.url = isp.url
-                    OR (isp.original_url IS NOT NULL AND sc.url = isp.original_url)
-                    OR (isp.resource_url IS NOT NULL AND sc.url = isp.resource_url)
-                ORDER BY sc.id DESC
-            `).all();
+        const savedQuery = `
+            SELECT
+                sc.id,
+                sc.url,
+                sc.platform,
+                sc.created_at,
+                sc.checked,
+                isp.media_id,
+                isp.media_type,
+                isp.title,
+                isp.cta_type,
+                isp.cta_keyword,
+                isp.action_type,
+                isp.action_input,
+                isp.action_status,
+                isp.sender_id,
+                isp.message_id,
+                isp.received_at,
+                COALESCE(isp.original_url, isp.url) AS original_url,
+                isp.resource_url,
+                isp.resource_platform,
+                0 AS is_shared_only,
+                NULL AS shared_post_id
+            FROM saved_content sc
+            LEFT JOIN instagram_shared_posts isp
+                ON sc.url = isp.url
+                OR (isp.original_url IS NOT NULL AND sc.url = isp.original_url)
+                OR (isp.resource_url IS NOT NULL AND sc.url = isp.resource_url)
+            ORDER BY sc.id DESC
+        `;
 
-        const sharedOnlyRows =
-            db.prepare(`
-                SELECT
-                    isp.id AS shared_post_id,
-                    isp.media_id,
-                    isp.media_type,
-                    isp.title,
-                    COALESCE(isp.original_url, isp.url) AS url,
-                    isp.original_url,
-                    isp.resource_url,
-                    isp.resource_platform,
-                    isp.cta_type,
-                    isp.cta_keyword,
-                    isp.action_type,
-                    isp.action_input,
-                    isp.action_status,
-                    isp.sender_id,
-                    isp.message_id,
-                    isp.received_at
-                FROM instagram_shared_posts isp
-                LEFT JOIN saved_content sc
-                    ON (isp.url IS NOT NULL AND isp.url = sc.url)
-                    OR (isp.original_url IS NOT NULL AND isp.original_url = sc.url)
-                    OR (isp.resource_url IS NOT NULL AND isp.resource_url = sc.url)
-                WHERE sc.id IS NULL
-                ORDER BY isp.id DESC
-            `).all();
+        const sharedOnlyQuery = `
+            SELECT
+                isp.id AS shared_post_id,
+                isp.media_id,
+                isp.media_type,
+                isp.title,
+                COALESCE(isp.original_url, isp.url) AS url,
+                isp.original_url,
+                isp.resource_url,
+                isp.resource_platform,
+                isp.cta_type,
+                isp.cta_keyword,
+                isp.action_type,
+                isp.action_input,
+                isp.action_status,
+                isp.sender_id,
+                isp.message_id,
+                isp.received_at
+            FROM instagram_shared_posts isp
+            LEFT JOIN saved_content sc
+                ON (isp.url IS NOT NULL AND isp.url = sc.url)
+                OR (isp.original_url IS NOT NULL AND isp.original_url = sc.url)
+                OR (isp.resource_url IS NOT NULL AND isp.resource_url = sc.url)
+            WHERE sc.id IS NULL
+            ORDER BY isp.id DESC
+        `;
+
+        const savedResult = await db.query(savedQuery);
+        const sharedOnlyResult = await db.query(sharedOnlyQuery);
+
+        const savedRows = savedResult.rows;
+        const sharedOnlyRows = sharedOnlyResult.rows;
 
         const formattedSharedRows =
             sharedOnlyRows.map(
@@ -1145,10 +1136,10 @@ app.get("/saved", (req, res) => {
 
 app.get(
     "/instagram/shared-posts",
-    (req, res) => {
+    async (req, res) => {
         try {
-            const rows =
-                db.prepare(`
+            const result =
+                await db.query(`
                     SELECT
                         id,
                         media_id,
@@ -1167,9 +1158,9 @@ app.get(
                         received_at
                     FROM instagram_shared_posts
                     ORDER BY id DESC
-                `).all();
+                `);
 
-            res.json(rows);
+            res.json(result.rows);
         } catch (error) {
             console.error(
                 "Could not fetch Instagram shared posts:",
@@ -1186,7 +1177,7 @@ app.get(
 
 app.delete(
     "/instagram/shared-posts/:id",
-    (req, res) => {
+    async (req, res) => {
         const id =
             Number(req.params.id);
 
@@ -1200,26 +1191,32 @@ app.delete(
             });
         }
 
-        const stmt =
-            db.prepare(
-                "DELETE FROM instagram_shared_posts WHERE id = ?"
-            );
+        try {
+            const result =
+                await db.query(
+                    "DELETE FROM instagram_shared_posts WHERE id = $1",
+                    [id]
+                );
 
-        const result =
-            stmt.run(id);
+            if (result.rowCount === 0) {
+                return res.status(404).json({
+                    error:
+                        "Instagram shared post not found"
+                });
+            }
 
-        if (result.changes === 0) {
-            return res.status(404).json({
+            res.json({
+                message:
+                    "Instagram shared post deleted!",
+                id
+            });
+        } catch (error) {
+            console.error(error);
+            res.status(500).json({
                 error:
-                    "Instagram shared post not found"
+                    "Could not delete Instagram shared post"
             });
         }
-
-        res.json({
-            message:
-                "Instagram shared post deleted!",
-            id
-        });
     }
 );
 
@@ -1389,10 +1386,35 @@ app.use(
 
 const PORT = process.env.PORT || 3000;
 
-if (require.main === module) {
-    const server = app.listen(PORT, () => {
+async function startServer(port = (process.env.PORT || 3000)) {
+    if (process.env.NODE_ENV === "production" && !process.env.DATABASE_URL) {
+        throw new Error(
+            "[DATABASE CONFIG ERROR] DATABASE_URL is required to start RVAULT in production. Refusing to run with in-memory database."
+        );
+    }
+
+    if (db.isInMemory) {
+        if (process.env.NODE_ENV !== "test" && process.env.ALLOW_IN_MEMORY_DB !== "true") {
+            throw new Error(
+                "[DATABASE CONFIG ERROR] No DATABASE_URL provided. Normal RVAULT server operation requires a persistent PostgreSQL database connection.\n" +
+                "To run with an ephemeral in-memory database for testing or local simulation, set ALLOW_IN_MEMORY_DB=true."
+            );
+        }
+        console.warn(
+            "\n⚠️  [DATABASE WARNING] Running with temporary in-memory PostgreSQL (pg-mem). " +
+            "Data will NOT be persisted across restarts.\n"
+        );
+    }
+
+    if (typeof db.initDatabase === "function") {
+        await db.initDatabase();
+    }
+
+    const listenPort = Number(port) || 3000;
+
+    const server = app.listen(listenPort, () => {
         console.log(
-            `RVAULT running at http://localhost:${PORT}`
+            `RVAULT running at http://localhost:${listenPort}`
         );
 
         console.log(
@@ -1401,19 +1423,36 @@ if (require.main === module) {
                 ? "ENABLED"
                 : "DISABLED"
         );
+
+        console.log(
+            `Health check available at http://localhost:${listenPort}/`
+        );
+
+        console.log(
+            `Webhook endpoint at http://localhost:${listenPort}/webhook`
+        );
     });
 
     server.on("error", (error) => {
         if (error.code === "EADDRINUSE") {
             console.error(
-                `\n[PORT CONFLICT] Port ${PORT} is already in use by another running process.`
+                `\n[PORT CONFLICT] Port ${listenPort} is already in use by another running process.`
             );
             console.error(
-                `To fix this, stop the existing process using port ${PORT} before restarting.\n`
+                `To fix this, stop the existing process using port ${listenPort} before restarting.\n`
             );
         } else {
             console.error("Server error:", error);
         }
+        process.exit(1);
+    });
+
+    return server;
+}
+
+if (require.main === module) {
+    startServer().catch((error) => {
+        console.error("Failed to start RVAULT server:", error);
         process.exit(1);
     });
 }
@@ -1422,5 +1461,6 @@ module.exports = {
     app,
     requireApiKey,
     verifyWebhookSignature,
-    isPublicExemption
+    isPublicExemption,
+    startServer
 };
